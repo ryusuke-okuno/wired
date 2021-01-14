@@ -5,6 +5,6 @@
   :author "Phi"
   :version "0.0.1"
   :serial t
-  :depends-on (#:alexandria #:usocket #:str)
+  :depends-on (#:alexandria #:usocket #:str #:bt-semaphore)
   :components ((:file "package")
                (:file "wired")))

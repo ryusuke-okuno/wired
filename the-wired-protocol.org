@@ -29,6 +29,11 @@
   create thread, reply and post images. It will be named "Wirechan"
 
 ** High-level overview of the protocol
+   Every WIRED client should have a running local server process in
+   another thread, and should try to connect to at most 20 peers. It
+   should be possible to access the WIRED even if you're connected to
+   only one peer.
+
 *** Pinging and connecting to peers
 	The protocol must have some way to check if a server is up and
 	working, so as to connect to every disponible peer.
@@ -38,6 +43,3 @@
 	Pinging is very simple: to check if an host is up, just send
 	"WIRED/0.1 PING", and it should answer you: "WIRED/0.1 PONG". If
 	it doesn't, it means that you should not connect to this peer.
-
-	Peer sharing is more complicated.
-	TODO: Explain why we need a dynamic peers file.
