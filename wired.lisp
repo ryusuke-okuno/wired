@@ -7,7 +7,7 @@
 (defparameter *peers-count* 0)
 (defparameter *peers* (make-hash-table))
 
-(defconstant +wired-port+ 6666)
+(defconstant +wired-port+ 4444)
 
 (defparameter *output-lock* (bt:make-lock))
 
@@ -46,7 +46,8 @@
 		 :type fixnum)
    (nodes-inbound :initform nil
 				  :reader nodes-inbound)
-   (nodes-outbound :initform nil)))
+   (nodes-outbound :initform nil))
+  (:documentation "A node connected to a larger P2P network"))
 
 (defclass node-connection ()
   ((thread :type bt:thread
@@ -61,7 +62,8 @@
 		   :initform (error "Must specify socket!")
 		   :reader node-connection-socket)
    (should-stop :initform nil
-				:accessor should-stop)))
+				:accessor should-stop))
+  (:documentation "Class used to describe a connection to another node in the network"))
 
 (define-condition connecting-to-myself () ()
   (:report (lambda (condition stream)
@@ -69,77 +71,56 @@
 			 (format stream "You cannot connect to your own server!"))))
 
 (defun socket-timeout-read-line (socket timeout)
+  "Read from socket with timeout. Returns NIL if time's out."
   (when (usocket:wait-for-input `(,socket) :timeout timeout :ready-only t)
 	(read-line (usocket:socket-stream socket))))
 
-;; (defun start-server (node)
-;;   "Start TCP server of the node that can handle multiple clients"
-;;   (with-slots (output nodes-inbound port) node
-;; 	(labels ((server-log ))
-;; 	  (server-log "Starting server...")
-;; 	  (let ((master-socket (usocket:socket-listen "0.0.0.0" port
-;; 												  :reuse-address t
-;; 												  :backlog 256)))
-;; 		(unwind-protect
-;; 			 (loop (loop :for socket :in (usocket:wait-for-input (cons master-socket nodes-inbound)
-;; 																 :ready-only t)
-;; 						 :do (if (eq socket master-socket)
-;; 								 (let ((new-connection (usocket:socket-accept master-socket :element-type 'character)))
-;; 								   (push new-connection nodes-inbound)
-;; 								   (server-log "New socket connected!"))
-;; 								 (handler-case (process-socket socket)
-;; 								   (end-of-file (e)
-;; 									 (declare (ignore e))
-;; 									 (server-log "Someone left the server")
-;; 									 (setf nodes-inbound (delete socket nodes-inbound))
-;; 									 (usocket:socket-close socket))))))
-;; 		  (server-log "Cleaning up...")
-;; 		  (mapc #'usocket:socket-close nodes-inbound)
-;; 		  (usocket:socket-close master-socket))))))
+(defmethod initialize-instance :after ((node node) &key)
+  (with-slots (server-thread output host port master-socket nodes-inbound)
+	  node
+	(setf output *standard-output*
+		  master-socket (usocket:socket-listen host port :reuse-address t)
+		  server-thread (bt:make-thread
+						 (lambda ()
+						   (node-log node "Starting server...")
+						   (unwind-protect
+								(loop (push (make-instance 'node-connection
+														   :main-node node
+														   :socket (usocket:socket-accept master-socket))
+											nodes-inbound))
+							 (dolist (connection nodes-inbound)
+							   (stop-node-connection connection)
+							   (node-log node "Waiting for thread ~a to stop..."
+										 (node-connection-id connection))
+							   (bt:join-thread (node-connection-thread connection)))
+							 (usocket:socket-close master-socket)
+							 (node-log node "Exiting...")))
+						 :name "Server thread"))))
 
 (defun connect-to-node (node host port)
   "Connect to the node at host:port. Don't forget to close it!"
   (with-slots (nodes-inbound nodes-outbound) node
-	(when (not (and (equal (host node) host)
-					(= (port node) port)))
+	(when (and (equal (host node) host)
+			   (= (port node) port))
 	  (error 'connecting-to-myself))
 	(if (some (lambda (n) (and (= (port n) port)
 						  (equal (host n) host)))
 			  nodes-inbound)
 		(format t "Already connected to this node!~%")
-		(handler-case (push (usocket:socket-connect host port :timeout 5)
+		(handler-case (push (make-instance 'node-connection
+										   :main-node node
+										   :socket (usocket:socket-connect host port :timeout 5))
 							nodes-outbound)
 		  (t (c)
 			(declare (ignore c))
 			(locked-format t "Failed to connect to node!~%"))))))
-
-(defmethod initialize-instance :after ((instance node) &key)
-  (with-slots (server-thread output host port master-socket nodes-inbound)
-	  instance
-	(setf output *standard-output*
-		  master-socket (usocket:socket-listen host port :reuse-address t)
-		  server-thread (bt:make-thread
-						 (lambda ()
-						   (node-log instance "Starting server...")
-						   (unwind-protect
-								(loop (push (make-instance 'node-connection
-														   :main-node instance
-														   :socket (usocket:socket-accept master-socket))
-											nodes-inbound))
-							 (dolist (connection nodes-inbound)
-							   (stop-node-connection connection)
-							   (node-log instance "Waiting for thread ~a to stop..."
-										 (node-connection-id connection))
-							   (bt:join-thread (node-connection-thread connection)))
-							 (usocket:socket-close master-socket)
-							 (node-log instance "Exiting...")))
-						 :name "Server thread"))))
 
 (defun node-log (node control-string &rest arguments)
   (apply #'locked-format `(,(node-output node)
 						   ,(str:concat "[S] " control-string "~%") ,@arguments)))
 
 (defun delete-closed-connections (node)
+  "Remove connections that have been closed."
   (with-slots (nodes-inbound) node
 	(setf nodes-inbound
 		  (loop :for connection :in nodes-inbound
@@ -148,20 +129,49 @@
 				:do (bt:join-thread (node-connection-thread connection))))))
 
 (defun all-nodes (node)
+  "Returns all connected nodes"
   (with-slots (nodes-inbound nodes-outbound) node
 	(append nodes-inbound nodes-outbound)))
 
+(defun send-message-to (node connection data)
+  "Sends message to node after checking if he was connected."
+  (delete-closed-connections node)
+  (with-slots (nodes-inbound nodes-outbound) node
+	(if (or (member connection nodes-inbound)
+			(member connection nodes-outbound))
+		(socket-stream-format (usocket:socket-stream (node-connection-socket connection))
+							  "~a" data)
+		(error "Sending a message to an unknown host!"))))
+
+(defgeneric recieve-message (node connection message)
+  (:documentation "Called every time the node recives a message from another node"))
+
+(defgeneric node-connection (node connection)
+  (:documentation "Called every time we connect to a new node or a new node connects to us"))
+
+(defgeneric node-deconnection (node connection)
+  (:documentation "Called every time we get disconnected from a node or a node disconnects from us"))
+
+(defmethod recieve-message ((node node) connection message)
+  (locked-format t "<~a>~a~%" (node-connection-id connection) message))
+
+(defmethod node-connection ((node node) connection)
+  (node-log node "New peer connected!"))
+
+(defmethod node-deconnection ((node node) connection)
+  (node-log node "~a left the server!" (node-connection-id connection)))
+
 (defvar *connections-count* 0)
 
-(defmethod initialize-instance :after ((instance node-connection) &key)
-  (with-slots (thread socket id should-stop main-node) instance
+(defmethod initialize-instance :after ((node node-connection) &key)
+  (with-slots (thread socket id should-stop main-node) node
 	(setf thread (bt:make-thread
 				  (lambda ()
-					(node-log main-node "New client!")
-					(handler-case (process-socket instance socket)
+					(node-connection main-node node)
+					(handler-case (process-socket node socket)
 					  (end-of-file (e)
 						(declare (ignore e))
-						(node-log main-node "Someone left the server")
+						(node-deconnection main-node node)
 						(setf should-stop t)
 						(usocket:socket-close socket))))
 				  :name id))))
@@ -170,14 +180,15 @@
   (format nil "LN~d" (1- (incf *connections-count*))))
 
 (defun process-socket (connection socket)
+  "Handle new connection to the server"
   (with-slots (thread main-node should-stop id) connection
 	(unwind-protect
 		 (loop :until should-stop
 			   :do (let ((line (socket-timeout-read-line socket 10.0)))
-					 (when line
-					   (locked-format t "<~a>~a~%" id line))))
+					 (when line (recieve-message main-node connection line))))
 	  (node-log main-node "Closing connection...")
 	  (usocket:socket-close socket))))
 
 (defun stop-node-connection (connection)
+  "Mark the connection as finished"
   (setf (should-stop connection) t))
