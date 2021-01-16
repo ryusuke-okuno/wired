@@ -58,6 +58,10 @@
    (main-node :initarg :main-node
 			  :initform (error "Must specify main node!")
 			  :type node)
+   (port :reader port
+		 :type fixnum)
+   (host :reader host
+		 :type string)
    (socket :initarg :socket
 		   :initform (error "Must specify socket!")
 		   :reader node-connection-socket)
@@ -97,15 +101,22 @@
 							 (node-log node "Exiting...")))
 						 :name "Server thread"))))
 
+(defun host-connected-p (node host port)
+  "Checks if we're already connected to this node"
+  (with-slots (nodes-inbound nodes-outbound) node
+	(or (some (lambda (n) (and (equal (host n) host)
+						  (equal (port n) port)))
+			  nodes-outbound)
+		(some (lambda (n) (and (equal (host n) host)))
+			  nodes-inbound))))
+
 (defun connect-to-node (node host port)
   "Connect to the node at host:port. Don't forget to close it!"
   (with-slots (nodes-inbound nodes-outbound) node
 	(when (and (equal (host node) host)
 			   (= (port node) port))
 	  (error 'connecting-to-myself))
-	(if (some (lambda (n) (and (= (port n) port)
-						  (equal (host n) host)))
-			  nodes-inbound)
+	(if (host-connected-p node host port)
 		(format t "Already connected to this node!~%")
 		(handler-case (push (make-instance 'node-connection
 										   :main-node node
@@ -121,12 +132,16 @@
 
 (defun delete-closed-connections (node)
   "Remove connections that have been closed."
-  (with-slots (nodes-inbound) node
-	(setf nodes-inbound
-		  (loop :for connection :in nodes-inbound
-				:unless (should-stop connection)
-				  :collect connection
-				:do (bt:join-thread (node-connection-thread connection))))))
+  (labels ((connection-list-remove (connection-list)
+			 (loop :for connection :in connection-list
+				   :unless (should-stop connection)
+					 :collect connection
+				   :else
+					 :do (bt:join-thread (node-connection-thread connection)))))
+	(with-slots (nodes-inbound nodes-outbound)
+		node
+	  (setf nodes-inbound (connection-list-remove nodes-inbound)
+			nodes-outbound (connection-list-remove nodes-outbound)))))
 
 (defun all-nodes (node)
   "Returns all connected nodes"
@@ -140,7 +155,7 @@
 	(if (or (member connection nodes-inbound)
 			(member connection nodes-outbound))
 		(socket-stream-format (usocket:socket-stream (node-connection-socket connection))
-							  "~a" data)
+							  "~a~%" data)
 		(error "Sending a message to an unknown host!"))))
 
 (defgeneric recieve-message (node connection message)
@@ -164,8 +179,11 @@
 (defvar *connections-count* 0)
 
 (defmethod initialize-instance :after ((node node-connection) &key)
-  (with-slots (thread socket id should-stop main-node) node
-	(setf thread (bt:make-thread
+  (with-slots (thread socket id should-stop main-node host port)
+	  node
+	(setf host (ip-address-to-string (usocket:get-peer-address socket))
+		  port (usocket:get-peer-port socket)
+		  thread (bt:make-thread
 				  (lambda ()
 					(node-connection main-node node)
 					(handler-case (process-socket node socket)
@@ -175,6 +193,9 @@
 						(setf should-stop t)
 						(usocket:socket-close socket))))
 				  :name id))))
+
+(defun ip-address-to-string (address)
+  (format nil "~{~a~^.~}" (coerce address 'list)))
 
 (defun generate-id ()
   (format nil "LN~d" (1- (incf *connections-count*))))
