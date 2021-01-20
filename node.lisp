@@ -1,13 +1,10 @@
-;;;; wired.lisp
-;;; The main file of the WIRED project. here are my attempts at
-;;; implementing the protocol
+;;;; node.lisp
+;;; Abstraction over a node in a peer-to-peer network
 
 (in-package #:wired)
 
 (defparameter *peers-count* 0)
 (defparameter *peers* (make-hash-table))
-
-(defconstant +wired-port+ 4444)
 
 (defparameter *output-lock* (bt:make-lock))
 
@@ -57,9 +54,6 @@
 (defclass node-connection ()
   ((thread :type bt:thread
 		   :reader node-connection-thread)
-   (id :initform (generate-id)
-	   :reader node-connection-id
-	   :type string)
    (main-node :initarg :main-node
 			  :initform (error "Must specify main node!")
 			  :type node)
@@ -83,7 +77,7 @@
   (when (usocket:wait-for-input `(,socket) :timeout timeout :ready-only t)
 	(read-line (usocket:socket-stream socket))))
 
-(defmethod initialize-instance :after ((node node) &key)
+(defmethod initialize-instance :after ((node node) &key (connection-class 'node-connection))
   (with-slots (server-thread output host port master-socket nodes-inbound)
 	  node
 	(setf output *standard-output*
@@ -92,15 +86,15 @@
 						 (lambda ()
 						   (node-log node "Starting server...")
 						   (unwind-protect
-								(loop (push (make-instance 'node-connection
+								(loop (push (make-instance connection-class
 														   :main-node node
 														   :socket (usocket:socket-accept master-socket))
 											nodes-inbound))
 							 (dolist (connection (all-nodes node))
 							   (stop-node-connection connection)
-							   (node-log node "Waiting for thread ~a to stop..."
-										 (node-connection-id connection))
-							   (bt:join-thread (node-connection-thread connection)))
+							   (node-log node "Waiting for thread to stop...")
+							   (or (bt:thread-alive-p (node-connection-thread connection))
+								   (bt:join-thread (node-connection-thread connection))))
 							 (usocket:socket-close master-socket)
 							 (node-log node "Exiting...")))
 						 :name "Server thread"))))
@@ -174,18 +168,18 @@
   (:documentation "Called every time we get disconnected from a node or a node disconnects from us"))
 
 (defmethod recieve-message ((node node) connection message)
-  (locked-format t "<~a>~a~%" (node-connection-id connection) message))
+  (locked-format t "New message: ~a~%" message))
 
 (defmethod node-connection ((node node) connection)
   (node-log node "New peer connected!"))
 
 (defmethod node-deconnection ((node node) connection)
-  (node-log node "~a left the server!" (node-connection-id connection)))
+  (node-log node "Node left the server!"))
 
 (defvar *connections-count* 0)
 
 (defmethod initialize-instance :after ((node node-connection) &key)
-  (with-slots (thread socket id should-stop main-node host port)
+  (with-slots (thread socket should-stop main-node host port)
 	  node
 	(setf host (ip-address-to-string (usocket:get-peer-address socket))
 		  port (usocket:get-peer-port socket)
@@ -198,7 +192,7 @@
 						(node-deconnection main-node node)
 						(event-set should-stop)
 						(usocket:socket-close socket))))
-				  :name id))))
+				  :name (format nil "Client thread N~d" (incf *connections-count*))))))
 
 (defun should-stop (connection)
   (with-slots (should-stop) connection
@@ -213,12 +207,9 @@
 (defun ip-address-to-string (address)
   (format nil "~{~a~^.~}" (coerce address 'list)))
 
-(defun generate-id ()
-  (format nil "LN~d" (1- (incf *connections-count*))))
-
 (defun process-socket (connection socket)
   "Handle new connection to the server"
-  (with-slots (thread main-node should-stop id) connection
+  (with-slots (thread main-node should-stop) connection
 	(unwind-protect
 		 (loop :until (event-get should-stop)
 			   :do (let ((line (socket-timeout-read-line socket 10.0)))
