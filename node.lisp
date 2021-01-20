@@ -38,6 +38,7 @@
   ((server-thread :type bt:thread)
    (master-socket :reader node-server-socket)
    (output :reader node-output)
+   (connection-type :reader connection-type)
    (host :initarg :host
 		 :initform "0.0.0.0"
 		 :reader host
@@ -78,23 +79,24 @@
 	(read-line (usocket:socket-stream socket))))
 
 (defmethod initialize-instance :after ((node node) &key (connection-class 'node-connection))
-  (with-slots (server-thread output host port master-socket nodes-inbound)
+  (with-slots (server-thread output host port
+			   master-socket nodes-inbound connection-type)
 	  node
 	(setf output *standard-output*
 		  master-socket (usocket:socket-listen host port :reuse-address t)
+		  connection-type connection-class
 		  server-thread (bt:make-thread
 						 (lambda ()
 						   (node-log node "Starting server...")
 						   (unwind-protect
-								(loop (push (make-instance connection-class
+								(loop (push (make-instance connection-type
 														   :main-node node
 														   :socket (usocket:socket-accept master-socket))
 											nodes-inbound))
 							 (dolist (connection (all-nodes node))
 							   (stop-node-connection connection)
 							   (node-log node "Waiting for thread to stop...")
-							   (or (bt:thread-alive-p (node-connection-thread connection))
-								   (bt:join-thread (node-connection-thread connection))))
+							   (ignore-errors (bt:join-thread (node-connection-thread connection))))
 							 (usocket:socket-close master-socket)
 							 (node-log node "Exiting...")))
 						 :name "Server thread"))))
@@ -111,13 +113,13 @@
 (defun connect-to-node (node host port)
   "Connect to the node at host:port. Don't forget to close it!"
   (delete-closed-connections node)
-  (with-slots (nodes-inbound nodes-outbound) node
+  (with-slots (nodes-inbound nodes-outbound connection-type) node
 	(when (and (equal (host node) host)
 			   (= (port node) port))
 	  (error 'connecting-to-myself))
 	(if (host-connected-p node host port)
 		(format t "Already connected to this node!~%")
-		(handler-case (push (make-instance 'node-connection
+		(handler-case (push (make-instance connection-type
 										   :main-node node
 										   :socket (usocket:socket-connect host port :timeout 5))
 							nodes-outbound)
@@ -185,8 +187,10 @@
 		  port (usocket:get-peer-port socket)
 		  thread (bt:make-thread
 				  (lambda ()
-					(node-connection main-node node)
-					(handler-case (process-socket node socket)
+					(handler-case
+						(progn
+						  (node-connection main-node node)
+						  (process-socket node socket))
 					  (end-of-file (e)
 						(declare (ignore e))
 						(node-deconnection main-node node)

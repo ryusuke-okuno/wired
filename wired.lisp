@@ -53,7 +53,7 @@
 
 (defmethod node-connection ((node wired-node) connection)
   (with-slots (socket id) connection
-	(socket-stream-format (usocket:socket-stream socket) "~a" id)
+	(socket-stream-format (usocket:socket-stream socket) "~a" (node-id node))
 	(let ((sent-id (socket-timeout-read-line socket 10.0)))
 	  (if (and sent-id
 			   (wired-node-id-p sent-id))
