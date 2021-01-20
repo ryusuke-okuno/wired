@@ -36,12 +36,10 @@
 										   :collect (char-code c)))))
 
 (defclass wired-node (node)
-  ((id :reader node-id))
+  ((id :reader node-id)
+   (identified-nodes :initform nil
+					 :accessor identified-nodes))
   (:documentation "Node in the wired network"))
-
-(defclass wired-node-connection (node-connection)
-  ((id :reader node-id))
-  (:documentation "Connection to a node in the wired network"))
 
 (defmethod initialize-instance :after ((instance wired-node) &key)
   (with-slots (host port id) instance
@@ -52,13 +50,14 @@
   (call-next-method))
 
 (defmethod node-connection ((node wired-node) connection)
-  (with-slots (socket id) connection
-	(socket-stream-format (usocket:socket-stream socket) "~a" (node-id node))
+  (with-slots (socket) connection
+	(socket-stream-format (usocket:socket-stream socket) "~a~%" (node-id node))
 	(let ((sent-id (socket-timeout-read-line socket 10.0)))
 	  (if (and sent-id
 			   (wired-node-id-p sent-id))
 		  (progn
-			(setf id sent-id)
+			(push connection (identified-nodes node))
+			(node-log node "Peer identified himself as ~a" sent-id)
 			(call-next-method))
 		  (progn
 			(node-log node "Peer failed to identify itself!")

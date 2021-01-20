@@ -3,9 +3,6 @@
 
 (in-package #:wired)
 
-(defparameter *peers-count* 0)
-(defparameter *peers* (make-hash-table))
-
 (defparameter *output-lock* (bt:make-lock))
 
 (defun locked-format (stream control-string &rest arguments)
@@ -38,7 +35,6 @@
   ((server-thread :type bt:thread)
    (master-socket :reader node-server-socket)
    (output :reader node-output)
-   (connection-type :reader connection-type)
    (host :initarg :host
 		 :initform "0.0.0.0"
 		 :reader host
@@ -78,25 +74,25 @@
   (when (usocket:wait-for-input `(,socket) :timeout timeout :ready-only t)
 	(read-line (usocket:socket-stream socket))))
 
-(defmethod initialize-instance :after ((node node) &key (connection-class 'node-connection))
+(defmethod initialize-instance :after ((node node) &key)
   (with-slots (server-thread output host port
-			   master-socket nodes-inbound connection-type)
+			   master-socket nodes-inbound)
 	  node
 	(setf output *standard-output*
 		  master-socket (usocket:socket-listen host port :reuse-address t)
-		  connection-type connection-class
 		  server-thread (bt:make-thread
 						 (lambda ()
 						   (node-log node "Starting server...")
 						   (unwind-protect
-								(loop (push (make-instance connection-type
+								(loop (push (make-instance 'node-connection
 														   :main-node node
 														   :socket (usocket:socket-accept master-socket))
 											nodes-inbound))
 							 (dolist (connection (all-nodes node))
 							   (stop-node-connection connection)
 							   (node-log node "Waiting for thread to stop...")
-							   (ignore-errors (bt:join-thread (node-connection-thread connection))))
+							   (or (bt:thread-alive-p (node-connection-thread connection))
+								   (bt:join-thread (node-connection-thread connection))))
 							 (usocket:socket-close master-socket)
 							 (node-log node "Exiting...")))
 						 :name "Server thread"))))
@@ -113,13 +109,13 @@
 (defun connect-to-node (node host port)
   "Connect to the node at host:port. Don't forget to close it!"
   (delete-closed-connections node)
-  (with-slots (nodes-inbound nodes-outbound connection-type) node
+  (with-slots (nodes-inbound nodes-outbound) node
 	(when (and (equal (host node) host)
 			   (= (port node) port))
 	  (error 'connecting-to-myself))
 	(if (host-connected-p node host port)
 		(format t "Already connected to this node!~%")
-		(handler-case (push (make-instance connection-type
+		(handler-case (push (make-instance 'node-connection
 										   :main-node node
 										   :socket (usocket:socket-connect host port :timeout 5))
 							nodes-outbound)
@@ -138,7 +134,8 @@
 				   :unless (should-stop connection)
 					 :collect connection
 				   :else
-					 :do (bt:join-thread (node-connection-thread connection)))))
+					 :do (or (bt:thread-alive-p (node-connection-thread connection))
+							 (bt:join-thread (node-connection-thread connection))))))
 	(with-slots (nodes-inbound nodes-outbound)
 		node
 	  (setf nodes-inbound (connection-list-remove nodes-inbound)
