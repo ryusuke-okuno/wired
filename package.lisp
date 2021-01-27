@@ -1,5 +1,5 @@
 ;;;; package.lisp
 
 (defpackage #:wired
-  (:use #:cl)
-  (:export #:peer #:wired-server))
+  (:use #:cl #:trivial-utf-8)
+  (:export #:node #:wired-node))

@@ -3,6 +3,8 @@
 
 (in-package #:wired)
 
+(declaim (optimize (safety 2) (debug 3)))
+
 (defparameter *output-lock* (bt:make-lock))
 
 (defun locked-format (stream control-string &rest arguments)
@@ -14,6 +16,11 @@
   "Force the output after format"
   (apply #'format `(,stream ,control-string ,@args))
   (force-output stream))
+
+(defun socket-send-buffer (socket data)
+  (let ((s (usocket:socket-stream socket)))
+	(write-sequence data s)
+	(force-output s)))
 
 (defclass atomic-event ()
   ((value :initform nil
@@ -69,10 +76,12 @@
 			 (declare (ignore condition))
 			 (format stream "You cannot connect to your own server!"))))
 
-(defun socket-timeout-read-line (socket timeout)
+(defun socket-timeout-read (socket timeout)
   "Read from socket with timeout. Returns NIL if time's out."
   (when (usocket:wait-for-input `(,socket) :timeout timeout :ready-only t)
-	(read-line (usocket:socket-stream socket))))
+	(let* ((data (make-array 64 :element-type '(unsigned-byte 8) :initial-element 0)))
+	  (read-sequence data (usocket:socket-stream socket))
+	  data)))
 
 (defmethod initialize-instance :after ((node node) &key)
   (with-slots (server-thread output host port
@@ -86,12 +95,14 @@
 						   (unwind-protect
 								(loop (push (make-instance 'node-connection
 														   :main-node node
-														   :socket (usocket:socket-accept master-socket))
+														   :socket (usocket:socket-accept
+																	master-socket
+																	:element-type '(unsigned-byte 8)))
 											nodes-inbound))
 							 (dolist (connection (all-nodes node))
 							   (stop-node-connection connection)
 							   (node-log node "Waiting for thread to stop...")
-							   (or (bt:thread-alive-p (node-connection-thread connection))
+							   (or (not (bt:thread-alive-p (node-connection-thread connection)))
 								   (bt:join-thread (node-connection-thread connection))))
 							 (usocket:socket-close master-socket)
 							 (node-log node "Exiting...")))
@@ -117,7 +128,10 @@
 		(format t "Already connected to this node!~%")
 		(handler-case (push (make-instance 'node-connection
 										   :main-node node
-										   :socket (usocket:socket-connect host port :timeout 5))
+										   :socket (usocket:socket-connect
+													host port
+													:timeout 5
+													:element-type '(unsigned-byte 8)))
 							nodes-outbound)
 		  (t (c)
 			(declare (ignore c))
@@ -134,8 +148,9 @@
 				   :unless (should-stop connection)
 					 :collect connection
 				   :else
-					 :do (or (bt:thread-alive-p (node-connection-thread connection))
-							 (bt:join-thread (node-connection-thread connection))))))
+					 :do (or (not ()))
+						 ;; TODO
+						 (bt:join-thread (node-connection-thread connection)))))
 	(with-slots (nodes-inbound nodes-outbound)
 		node
 	  (setf nodes-inbound (connection-list-remove nodes-inbound)
@@ -196,9 +211,9 @@
 				  :name (format nil "Client thread N~d" (incf *connections-count*))))))
 
 (defun should-stop (connection)
-  (with-slots (should-stop) connection
-	(event-get should-stop)))
-
+  (with-slots (should-stop thread) connection
+	(or (not (bt:thread-alive-p thread))
+		(event-get should-stop))))
 
 (defun stop-node-connection (connection)
   "Mark the connection as finished"
@@ -213,7 +228,8 @@
   (with-slots (thread main-node should-stop) connection
 	(unwind-protect
 		 (loop :until (event-get should-stop)
-			   :do (let ((line (socket-timeout-read-line socket 10.0)))
-					 (when line (recieve-message main-node connection line))))
+			   :do (let ((line (socket-timeout-read socket 10.0)))
+					 (when line
+					   (recieve-message main-node connection line))))
 	  (node-log main-node "Closing connection...")
 	  (usocket:socket-close socket))))

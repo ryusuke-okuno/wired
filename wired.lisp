@@ -10,36 +10,32 @@
 		   (type fixnum port))
   (let ((digest (ironclad:make-digest :sha512)))
 	(ironclad:update-digest digest
-							(string-to-byte-array
+							(string-to-utf-8-bytes
 							 (str:concat host (write-to-string port)
 										 (write-to-string (random 99999999)))))
-	(encode-base16 (ironclad:produce-digest digest))))
-
-(defun encode-base16 (array)
-  "Transform byte array into Base 16-encoded string"
-  (declare (type (simple-array (unsigned-byte 8)) array))
-  (apply #'str:concat
-		 (map 'list
-			  (lambda (a)
-				(let ((number-string (write-to-string a :base 16)))
-				  (str:concat (str:repeat (- 2 (length number-string)) "0")
-							  number-string)))
-			  array)))
-
-(defun string-to-byte-array (string)
-  "Get every character of a ASCII-encoded string into a byte array"
-  (declare (type string string))
-  (the (simple-array (unsigned-byte 8))
-	   (make-array (length string)
-				   :element-type '(unsigned-byte 8)
-				   :initial-contents (loop :for c :across string
-										   :collect (char-code c)))))
+	(ironclad:produce-digest digest)))
 
 (defclass wired-node (node)
   ((id :reader node-id)
-   (identified-nodes :initform nil
-					 :accessor identified-nodes))
+   (connections-table :initform (make-hash-table :test #'equalp)
+					  :accessor wired-connections-table))
   (:documentation "Node in the wired network"))
+
+(defclass wired-post ()
+  ((date :initarg :date
+		 :initform (error "date!")
+		 :reader post-date)
+   (poster-id :initarg :poster-id
+			  :initform (error "poster-id!")
+			  :reader post-poster-id)
+   (message :initarg :message
+			:initform (error "message!")
+			:reader post-message))
+  (:documentation "A post in the wired board"))
+
+(defparameter *board* (make-array 0 :element-type 'wired-post
+									:adjustable t
+									:fill-pointer t))
 
 (defmethod initialize-instance :after ((instance wired-node) &key)
   (with-slots (host port id) instance
@@ -50,20 +46,21 @@
   (call-next-method))
 
 (defmethod node-connection ((node wired-node) connection)
-  (with-slots (socket) connection
-	(socket-stream-format (usocket:socket-stream socket) "~a~%" (node-id node))
-	(let ((sent-id (socket-timeout-read-line socket 10.0)))
-	  (if (and sent-id
-			   (wired-node-id-p sent-id))
+  (with-slots (connections-table id) node
+	(socket-send-buffer (node-connection-socket connection) id)
+	(let ((sent-id (socket-timeout-read (node-connection-socket connection) 10.0)))
+	  (format t "Sent id: ~a~%" sent-id)
+	  (if (and sent-id (wired-node-id-p sent-id)
+			   (null (gethash sent-id connections-table)))
 		  (progn
-			(push connection (identified-nodes node))
 			(node-log node "Peer identified himself as ~a" sent-id)
+			(setf (gethash sent-id connections-table) connection)
 			(call-next-method))
 		  (progn
 			(node-log node "Peer failed to identify itself!")
-			(usocket:socket-close socket)
+			(usocket:socket-close (node-connection-socket connection))
 			(stop-node-connection connection))))))
 
 (defun wired-node-id-p (id)
-  (declare (type string id))
-  (= (length id) 128))
+  (declare (type (array (unsigned-byte 8)) id))
+  (= (length id) 64))
