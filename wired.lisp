@@ -4,6 +4,15 @@
 
 (in-package #:wired)
 
+(defun base-16-encode (array)
+  (declare (type (array (unsigned-byte 8)) array))
+  (apply #'str:concat
+		 (map 'list
+			  (lambda (a)
+				(let ((s (write-to-string a :base 16)))
+				  (str:concat (str:repeat (- 2 (length s)) "0") s)))
+			  array)))
+
 (defun generate-id (host port)
   "Generate a random id using the host, port and a random number"
   (declare (type string host)
@@ -13,11 +22,11 @@
 							(string-to-utf-8-bytes
 							 (str:concat host (write-to-string port)
 										 (write-to-string (random 99999999)))))
-	(ironclad:produce-digest digest)))
+	(base-16-encode (ironclad:produce-digest digest))))
 
 (defclass wired-node (node)
   ((id :reader node-id)
-   (connections-table :initform (make-hash-table :test #'equalp)
+   (connections-table :initform (make-hash-table :test #'equal)
 					  :accessor wired-connections-table))
   (:documentation "Node in the wired network"))
 
@@ -47,7 +56,8 @@
 
 (defmethod node-connection ((node wired-node) connection)
   (with-slots (connections-table id) node
-	(socket-send-buffer (node-connection-socket connection) id)
+	(socket-stream-format (usocket:socket-stream (node-connection-socket connection))
+						  "~a~%" id)
 	(let ((sent-id (socket-timeout-read (node-connection-socket connection) 10.0)))
 	  (format t "Sent id: ~a~%" sent-id)
 	  (if (and sent-id (wired-node-id-p sent-id)
@@ -62,5 +72,5 @@
 			(stop-node-connection connection))))))
 
 (defun wired-node-id-p (id)
-  (declare (type (array (unsigned-byte 8)) id))
-  (= (length id) 64))
+  (declare (type string id))
+  (= (length id) 128))

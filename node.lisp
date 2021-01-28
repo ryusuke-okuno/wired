@@ -79,9 +79,9 @@
 (defun socket-timeout-read (socket timeout)
   "Read from socket with timeout. Returns NIL if time's out."
   (when (usocket:wait-for-input `(,socket) :timeout timeout :ready-only t)
-	(let* ((data (make-array 64 :element-type '(unsigned-byte 8) :initial-element 0)))
-	  (read-sequence data (usocket:socket-stream socket))
-	  data)))
+	(let* ((stream (usocket:socket-stream socket))
+		   (line (read-line stream)))
+	  (when line line))))
 
 (defmethod initialize-instance :after ((node node) &key)
   (with-slots (server-thread output host port
@@ -97,13 +97,10 @@
 														   :main-node node
 														   :socket (usocket:socket-accept
 																	master-socket
-																	:element-type '(unsigned-byte 8)))
+																	:element-type 'character))
 											nodes-inbound))
 							 (dolist (connection (all-nodes node))
-							   (stop-node-connection connection)
-							   (node-log node "Waiting for thread to stop...")
-							   (or (not (bt:thread-alive-p (node-connection-thread connection)))
-								   (bt:join-thread (node-connection-thread connection))))
+							   (stop-node-connection connection))
 							 (usocket:socket-close master-socket)
 							 (node-log node "Exiting...")))
 						 :name "Server thread"))))
@@ -131,7 +128,7 @@
 										   :socket (usocket:socket-connect
 													host port
 													:timeout 5
-													:element-type '(unsigned-byte 8)))
+													:element-type 'character))
 							nodes-outbound)
 		  (t (c)
 			(declare (ignore c))
@@ -144,13 +141,7 @@
 (defun delete-closed-connections (node)
   "Remove connections that have been closed."
   (labels ((connection-list-remove (connection-list)
-			 (loop :for connection :in connection-list
-				   :unless (should-stop connection)
-					 :collect connection
-				   :else
-					 :do (or (not ()))
-						 ;; TODO
-						 (bt:join-thread (node-connection-thread connection)))))
+			 (remove-if #'should-stop connection-list)))
 	(with-slots (nodes-inbound nodes-outbound)
 		node
 	  (setf nodes-inbound (connection-list-remove nodes-inbound)
