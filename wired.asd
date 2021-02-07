@@ -7,5 +7,6 @@
   :serial t
   :depends-on (#:alexandria #:usocket #:str #:bt-semaphore #:ironclad #:trivial-utf-8)
   :components ((:file "package")
+			   (:file "utility")
 			   (:file "node")
                (:file "wired")))
