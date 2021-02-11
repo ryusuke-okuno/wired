@@ -6,6 +6,12 @@
 
 (defparameter *wired-version* "0.1")
 
+(defun string-group (string n)
+  (if (str:empty? string)
+	  nil
+	  (cons (str:substring 0 n string)
+			(string-group (str:substring n nil string) n))))
+
 (defun base-16-encode (array)
   "Return the string of the encoded byte array in base 16"
   (declare (type (array (unsigned-byte 8)) array))
@@ -15,6 +21,12 @@
 				(let ((s (write-to-string a :base 16)))
 				  (str:concat (str:repeat (- 2 (length s)) "0") s)))
 			  array)))
+
+(defun base-16-decode (string)
+  "Returns the decoded string data"
+  (map 'vector
+	   (lambda (x) (parse-integer x :radix 16))
+	   (string-group string 2)))
 
 (defun generate-id (host port)
   "Generate a random id using the host, port and a random number"
@@ -27,56 +39,24 @@
 										 (write-to-string (random 99999999)))))
 	(base-16-encode (ironclad:produce-digest digest))))
 
-(defun get-wired-header (&optional (version *wired-version*))
-  "Returns the obligatory header of the request"
-  (format nil "WIRED/~d" version))
-
 (defclass wired-node (node)
   ((id :reader node-id)
    (connections-table :initform (make-hash-table :test #'equal)
 					  :accessor wired-connections-table))
   (:documentation "Node in the wired network"))
 
-(defclass wired-post ()
-  ((date :initarg :date
-		 :initform (error "date!")
-		 :reader post-date)
-   (poster-id :initarg :poster-id
-			  :initform (error "poster-id!")
-			  :reader post-poster-id)
-   (message :initarg :message
-			:initform (error "message!")
-			:reader post-message))
-  (:documentation "A post in the wired board"))
-
-(defmethod print-object ((object wired-post) stream)
-  (format stream "<#WIRED-POST "))
-
-(defparameter *board* (make-array 0 :element-type 'wired-post
-									:adjustable t
-									:fill-pointer t))
+(defclass wired-node-connection (node-connection)
+  ((id :reader connection-id))
+  (:documentation "Specialization of node connection for the wired protocol"))
 
 (defmethod initialize-instance :after ((instance wired-node) &key)
   (with-slots (host port id) instance
 	(setf id (generate-id host port))))
 
-(defun handle-wired-request (node text)
-  "Handles a new sent request"
-  (with-slots (id connections-table) node
-	(let ((request (parse-wired-request text)))
-	  (node-log node "Recieved ~a" request)
-	  (ecase (getf request :action)
-		(send (if (equal id (getf request :destination))
-				  (vector-push-extend (read-from-string ()))))
-		(t (error "Cannot handle this type of message yet!"))))))
-
 (defmethod recieve-message ((node wired-node) connection message)
   (handler-case (handle-wired-request node message)
 	(wired-request-parsing-failed ()
-	  (node-log node "Parsing request failed!")
-	  (send-message-to node connection
-					   (forge-wired-request (list :version *wired-version*
-												  :action 'request-not-understood))))))
+	  (node-log node "Parsing request failed!"))))
 
 (defmethod node-connection ((node wired-node) connection)
   (with-slots (connections-table id) node
@@ -88,72 +68,62 @@
 			   (not (string= sent-id id)))
 		  (progn
 			(node-log node "Peer identified himself as ~a" sent-id)
-			(setf (gethash sent-id connections-table) connection)
-			(call-next-method))
+			(setf (gethash sent-id connections-table) connection))
 		  (progn
 			(node-log node "Peer failed to identify itself!")
 			(usocket:socket-close (node-connection-socket connection))
 			(stop-node-connection connection))))))
+
+(defmethod node-deconnection ((node wired-node) connection)
+  (node-log node "Wired deconnection!"))
 
 (define-condition wired-request-parsing-failed () ()
   (:report (lambda (condition stream)
 			 (declare (ignore condition))
              (format stream "Could not parse request!"))))
 
-(defparameter *wired-actions* '(("SEND" . (:name send :arguments (:destination :message)))
-								("BROADCAST" . (:name broadcast :arguments (:message)))
-								("GET" . (:name get :arguments ()))
-								("REQUEST-NOT-UNDERSTOOD" . (:name request-not-understood :arguments ())))
-  "List and informations about the different actions")
-
-(defun wired-assoc-from-action (action)
-  "Associates the action symbol to the name"
-  (rassoc action *wired-actions*
-		  :key (lambda (x) (getf x :name))))
-
-(defun wired-request-p (plist)
-  "Is plist a valid wired request?"
-  (with-plist ((:action name)
-			   (:version version))
-	  plist
-	(let ((plist-length (length plist)))
-	  (and name version (evenp plist-length)
-		   (loop :for arg :in (getf (cdr (wired-assoc-from-action name))
-									:arguments)
-				 :always (member arg plist))))))
-
-(defun forge-wired-request (plist)
-  "Transform plist to text request ready to be sent"
-  (when (wired-request-p plist)
-	(with-plist ((:action action)
-				 (:version version))
-		plist
-	  (let ((action-assoc (wired-assoc-from-action action)))
-		(str:concat (get-wired-header version)
-					" " (car action-assoc) " "
-					(str:join " "
-							  (mapcar (lambda (argument) (getf plist argument))
-									  (getf (cdr action-assoc) :arguments))))))))
-
-(defun parse-wired-request (request)
-  "Make plist from text wired request"
-  (flet ((parse-assert (value)
-		   (unless value (error 'wired-request-parsing-failed))))
-	(let ((splitted (str:split " " request :omit-nulls t)))
-	  (parse-assert (>= (length splitted) 2))
-	  (destructuring-bind (head action &rest arguments) splitted
-		(parse-assert (and (str:starts-with? "WIRED/" head)
-						   (member action *wired-actions* :test #'equal :key #'car)))
-		(let ((version (str:substring 6 nil head))
-			  (action (cdr (assoc action *wired-actions* :test #'equal))))
-		  (with-plist ((:name name)
-					   (:arguments args))
-			  action
-			(parse-assert (same-size args arguments))
-			(nconc (list :version version
-						 :action name)
-				   (mapcan #'list args arguments))))))))
+(defun print-to-string (obj)
+  "Print object to the returned string"
+  (str:replace-all "
+" "" (with-output-to-string (s)
+	   (print obj s))))
 
 (defun wired-node-id-p (id)
   (declare (type string id))
   (= (length id) 128))
+
+(defun make-wired-message (content hops)
+  (print-to-string (list :action 'broadcast
+						 :content content
+						 :hops hops)))
+
+(defun transmit-wired-message (node content hops)
+  "If the current node is the destination, add a new post.
+If it isn't, transmit it to the others nodes"
+  (maphash (lambda (id connection)
+			 (unless (member id hops :test #'equal)
+			   (node-log node "Sending to ~a" id)
+			   (send-message-to node connection
+								(make-wired-message content
+													(cons (node-id node)
+														  hops)))))
+		   (wired-connections-table node)))
+
+(defun wired-broadcast (node message)
+  "Send a message to the rest of the world."
+  (transmit-wired-message node message '()))
+
+(defun handle-wired-request (node message)
+  "Handles a new sent request"
+  (let ((parsed-message (ignore-errors (read-from-string message))))
+	(unless parsed-message (error 'wired-request-parsing-failed))
+	(node-log node "Got message: ~a" parsed-message)
+	(with-plist ((:action action)
+				 (:content content)
+				 (:hops hops))
+		parsed-message
+	  (when (some #'null (list action hops content))
+		(error 'wired-request-parsing-failed))
+	    (node-log node "=====ANON=====~%~a~%=============="
+				  content)	;Show that you recieved the message
+	  (transmit-wired-message node content hops))))

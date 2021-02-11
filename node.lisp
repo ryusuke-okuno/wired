@@ -41,6 +41,9 @@
 (defclass node ()
   ((server-thread :type bt:thread)
    (master-socket :reader node-server-socket)
+   (connection-class :reader node-connection-class
+					 :initarg :connection-class
+					 :initform 'node-connection)
    (output :reader node-output)
    (host :initarg :host
 		 :initform "0.0.0.0"
@@ -122,7 +125,7 @@
 			   (= (port node) port))
 	  (error 'connecting-to-myself))
 	(if (host-connected-p node host port)
-		(format t "Already connected to this node!~%")
+		(locked-format t "Already connected to this node!~%")
 		(handler-case (push (make-instance 'node-connection
 										   :main-node node
 										   :socket (usocket:socket-connect
