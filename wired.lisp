@@ -41,16 +41,16 @@
 
 (defclass wired-node (node)
   ((id :reader node-id)
-   (connections-table :initform (make-hash-table :test #'equal)
-					  :accessor wired-connections-table))
+   (connection-class :initform 'wired-node-connection))
   (:documentation "Node in the wired network"))
 
 (defclass wired-node-connection (node-connection)
-  ((id :reader connection-id))
+  ((id :accessor connection-id
+	   :initform "Default id"))
   (:documentation "Specialization of node connection for the wired protocol"))
 
 (defmethod initialize-instance :after ((instance wired-node) &key)
-  (with-slots (host port id) instance
+  (with-slots (host port id connection-class) instance
 	(setf id (generate-id host port))))
 
 (defmethod recieve-message ((node wired-node) connection message)
@@ -59,23 +59,25 @@
 	  (node-log node "Parsing request failed!"))))
 
 (defmethod node-connection ((node wired-node) connection)
-  (with-slots (connections-table id) node
-	(socket-stream-format (usocket:socket-stream (node-connection-socket connection))
-						  "~a~%" id)
-	(let ((sent-id (socket-timeout-read (node-connection-socket connection) 10.0)))
-	  (if (and sent-id (wired-node-id-p sent-id)
-			   (null (gethash sent-id connections-table))
-			   (not (string= sent-id id)))
-		  (progn
-			(node-log node "Peer identified himself as ~a" sent-id)
-			(setf (gethash sent-id connections-table) connection))
-		  (progn
-			(node-log node "Peer failed to identify itself!")
-			(usocket:socket-close (node-connection-socket connection))
-			(stop-node-connection connection))))))
+  (socket-stream-format (usocket:socket-stream (node-connection-socket connection))
+						"~a~%" (node-id node))
+  (let ((all-connections (all-nodes node))
+		(sent-id (socket-timeout-read (node-connection-socket connection) 10.0)))
+	(if (and sent-id (wired-node-id-p sent-id)
+			 (not (member sent-id all-connections :key #'connection-id :test #'equal))
+			 (not (string= sent-id (node-id node))))
+		(progn
+		  (node-log node "Peer identified himself as ~a" sent-id)
+		  (setf (connection-id connection) sent-id))
+		(progn
+		  (node-log node "Peer failed to identify itself!")
+		  (usocket:socket-close (node-connection-socket connection))
+		  (stop-node-connection connection)))))
 
 (defmethod node-deconnection ((node wired-node) connection)
-  (node-log node "Wired deconnection!"))
+  (with-slots (nodes-inbound nodes-outbound) node
+	(setf nodes-inbound (delete connection nodes-inbound)
+		  nodes-outbound (delete connection nodes-outbound))))
 
 (define-condition wired-request-parsing-failed () ()
   (:report (lambda (condition stream)
@@ -100,14 +102,14 @@
 (defun transmit-wired-message (node content hops)
   "If the current node is the destination, add a new post.
 If it isn't, transmit it to the others nodes"
-  (maphash (lambda (id connection)
-			 (unless (member id hops :test #'equal)
-			   (node-log node "Sending to ~a" id)
-			   (send-message-to node connection
-								(make-wired-message content
-													(cons (node-id node)
-														  hops)))))
-		   (wired-connections-table node)))
+  (mapcar (lambda (connection)
+			(unless (member (connection-id connection) hops :test #'equal)
+			  (node-log node "Sending to ~a" (connection-id connection))
+			  (send-message-to node connection
+							   (make-wired-message content
+												   (cons (node-id node)
+														 hops)))))
+		  (all-nodes node)))
 
 (defun wired-broadcast (node message)
   "Send a message to the rest of the world."
@@ -124,6 +126,5 @@ If it isn't, transmit it to the others nodes"
 		parsed-message
 	  (when (some #'null (list action hops content))
 		(error 'wired-request-parsing-failed))
-	    (node-log node "=====ANON=====~%~a~%=============="
-				  content)	;Show that you recieved the message
+	    (format t "=====ANON=====~%~a~%==============" content)	;Show that you recieved the message
 	  (transmit-wired-message node content hops))))

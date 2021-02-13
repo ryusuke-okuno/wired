@@ -88,7 +88,7 @@
 
 (defmethod initialize-instance :after ((node node) &key)
   (with-slots (server-thread output host port
-			   master-socket nodes-inbound)
+			   master-socket nodes-inbound connection-class)
 	  node
 	(setf output *standard-output*
 		  master-socket (usocket:socket-listen host port :reuse-address t)
@@ -96,7 +96,7 @@
 						 (lambda ()
 						   (node-log node "Starting server...")
 						   (unwind-protect
-								(loop (push (make-instance 'node-connection
+								(loop (push (make-instance connection-class
 														   :main-node node
 														   :socket (usocket:socket-accept
 																	master-socket
@@ -120,13 +120,14 @@
 (defun connect-to-node (node host port)
   "Connect to the node at host:port. Don't forget to close it!"
   (delete-closed-connections node)
-  (with-slots (nodes-inbound nodes-outbound) node
+  (with-slots (nodes-inbound nodes-outbound connection-class)
+	  node
 	(when (and (equal (host node) host)
 			   (= (port node) port))
 	  (error 'connecting-to-myself))
 	(if (host-connected-p node host port)
 		(locked-format t "Already connected to this node!~%")
-		(handler-case (push (make-instance 'node-connection
+		(handler-case (push (make-instance connection-class
 										   :main-node node
 										   :socket (usocket:socket-connect
 													host port
