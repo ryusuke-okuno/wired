@@ -53,11 +53,6 @@
   (with-slots (host port id connection-class) instance
 	(setf id (generate-id host port))))
 
-(defmethod recieve-message ((node wired-node) connection message)
-  (handler-case (handle-wired-request node message)
-	(wired-request-parsing-failed ()
-	  (node-log node "Parsing request failed!"))))
-
 (defmethod node-connection ((node wired-node) connection)
   (socket-stream-format (usocket:socket-stream (node-connection-socket connection))
 						"~a~%" (node-id node))
@@ -79,6 +74,11 @@
 	(setf nodes-inbound (delete connection nodes-inbound)
 		  nodes-outbound (delete connection nodes-outbound))))
 
+(defmethod recieve-message ((node wired-node) connection message)
+  (handler-case (handle-wired-request node connection message)
+	(wired-request-parsing-failed ()
+	  (node-log node "Parsing request failed!"))))
+
 (define-condition wired-request-parsing-failed () ()
   (:report (lambda (condition stream)
 			 (declare (ignore condition))
@@ -94,37 +94,59 @@
   (declare (type string id))
   (= (length id) 128))
 
-(defun make-wired-message (content hops)
-  (print-to-string (list :action 'broadcast
+(defun make-wired-message (action content hops)
+  (print-to-string (list :action action
 						 :content content
 						 :hops hops)))
 
 (defun transmit-wired-message (node content hops)
   "If the current node is the destination, add a new post.
 If it isn't, transmit it to the others nodes"
-  (mapcar (lambda (connection)
-			(unless (member (connection-id connection) hops :test #'equal)
-			  (node-log node "Sending to ~a" (connection-id connection))
-			  (send-message-to node connection
-							   (make-wired-message content
-												   (cons (node-id node)
-														 hops)))))
-		  (all-nodes node)))
+  (let ((destination-nodes (all-nodes node)))
+	(dolist (connection destination-nodes)
+	  (unless (member (connection-id connection) hops :test #'equal)
+		(node-log node "Sending to ~a" (connection-id connection))
+		(send-message-to node connection
+						 (make-wired-message 'broadcast content
+											 (append (mapcar #'connection-id destination-nodes)
+													 hops)))))))
 
 (defun wired-broadcast (node message)
   "Send a message to the rest of the world."
-  (transmit-wired-message node message '()))
+  (transmit-wired-message node message (list (node-id node))))
 
-(defun handle-wired-request (node message)
+(defun handle-wired-request (node connection message)
   "Handles a new sent request"
-  (let ((parsed-message (ignore-errors (read-from-string message))))
+  (let ((parsed-message (ignore-errors
+						 (let ((*package* (find-package :wired)))
+						   (read-from-string message)))))
 	(unless parsed-message (error 'wired-request-parsing-failed))
 	(node-log node "Got message: ~a" parsed-message)
 	(with-plist ((:action action)
 				 (:content content)
 				 (:hops hops))
 		parsed-message
-	  (when (some #'null (list action hops content))
+	  (when (or (some #'null (append (list action content)
+									 (when (eq action 'broadcast) hops))))
 		(error 'wired-request-parsing-failed))
-	    (format t "=====ANON=====~%~a~%==============" content)	;Show that you recieved the message
-	  (transmit-wired-message node content hops))))
+	  (ecase action
+		(broadcast						;Action broadcast, meaning: "send message to the whole network"
+		 (format t "=====ANON=====~%~a~%==============~%" content) ;Show that you recieved the message
+		 (transmit-wired-message node content hops))  ;And transmit it
+		(get-peers
+		 (send-message-to node connection
+						  (make-wired-message 'send-peers
+											  (mapcar (lambda (c) (list :host (host c)
+																   :port (port c)))
+													  (remove connection (all-nodes node)))
+											  nil)))
+		(send-peers
+		 (mapcar (lambda (peer-plist)
+				   (with-plist ((:host host)
+								(:port port))
+					   peer-plist
+					 (when (or (null host) (null port))
+					   (error 'wired-request-parsing-failed))
+					 (connect-to-node node host port)))
+				 content))
+		(t (error 'wired-request-parsing-failed))))))
