@@ -64,15 +64,18 @@
    (main-node :initarg :main-node
 			  :initform (error "Must specify main node!")
 			  :type node)
-   (port :reader port
-		 :type fixnum)
-   (host :reader host
-		 :type string)
    (socket :initarg :socket
 		   :initform (error "Must specify socket!")
 		   :reader node-connection-socket)
    (should-stop :initform (make-instance 'atomic-event)))
   (:documentation "Class used to describe a connection to another node in the network"))
+
+(defmethod host ((connection node-connection))
+  (ip-address-to-string
+   (usocket:get-peer-address (node-connection-socket connection))))
+
+(defmethod port ((connection node-connection))
+  (usocket:get-peer-port (node-connection-socket connection)))
 
 (define-condition connecting-to-myself () ()
   (:report (lambda (condition stream)
@@ -110,12 +113,10 @@
 
 (defun host-connected-p (node host port)
   "Checks if we're already connected to this node"
-  (with-slots (nodes-inbound nodes-outbound) node
-	(or (some (lambda (n) (and (equal (host n) host)
-						  (equal (port n) port)))
-			  nodes-outbound)
-		(some (lambda (n) (and (equal (host n) host)))
-			  nodes-inbound))))
+  (let ((formated-host (ip-address-to-string (usocket:get-host-by-name host))))
+	(some (lambda (n) (and (equal (host n) formated-host)
+					  (equal (port n) port)))
+		  (all-nodes node))))
 
 (defun connect-to-node (node host port)
   "Connect to the node at host:port. Don't forget to close it!"
@@ -188,11 +189,9 @@
 (defvar *connections-count* 0)
 
 (defmethod initialize-instance :after ((node node-connection) &key)
-  (with-slots (thread socket should-stop main-node host port)
+  (with-slots (thread socket should-stop main-node)
 	  node
-	(setf host (ip-address-to-string (usocket:get-peer-address socket))
-		  port (usocket:get-peer-port socket)
-		  thread (bt:make-thread
+	(setf thread (bt:make-thread
 				  (lambda ()
 					(handler-case
 						(progn

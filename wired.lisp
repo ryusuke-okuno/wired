@@ -6,12 +6,6 @@
 
 (defparameter *wired-version* "0.1")
 
-(defun string-group (string n)
-  (if (str:empty? string)
-	  nil
-	  (cons (str:substring 0 n string)
-			(string-group (str:substring n nil string) n))))
-
 (defun base-16-encode (array)
   "Return the string of the encoded byte array in base 16"
   (declare (type (array (unsigned-byte 8)) array))
@@ -22,52 +16,64 @@
 				  (str:concat (str:repeat (- 2 (length s)) "0") s)))
 			  array)))
 
-(defun base-16-decode (string)
-  "Returns the decoded string data"
-  (map 'vector
-	   (lambda (x) (parse-integer x :radix 16))
-	   (string-group string 2)))
-
-(defun generate-id (host port)
-  "Generate a random id using the host, port and a random number"
-  (declare (type string host)
-		   (type fixnum port))
-  (let ((digest (ironclad:make-digest :sha512)))
-	(ironclad:update-digest digest
-							(string-to-utf-8-bytes
-							 (str:concat host (write-to-string port)
-										 (write-to-string (random 99999999)))))
-	(base-16-encode (ironclad:produce-digest digest))))
+(defun generate-id ()
+  "Generate a random id for network identification"
+  (base-16-encode (make-array 64 :element-type '(unsigned-byte 8)
+								 :initial-contents (loop :repeat 64
+														 :collect (the (unsigned-byte 8)
+																	   (random 255))))))
 
 (defclass wired-node (node)
-  ((id :reader node-id)
+  ((id :reader node-id
+	   :initform (generate-id))
    (connection-class :initform 'wired-node-connection))
   (:documentation "Node in the wired network"))
 
 (defclass wired-node-connection (node-connection)
-  ((id :accessor connection-id
-	   :initform "Default id"))
-  (:documentation "Specialization of node connection for the wired protocol"))
+  ((id :accessor node-id
+	   :initform "Default id")
+   (server-port :initform 4444))
+  (:documentation "Connection to a wired node"))
 
-(defmethod initialize-instance :after ((instance wired-node) &key)
-  (with-slots (host port id connection-class) instance
-	(setf id (generate-id host port))))
+(defmethod port ((connection node-connection))
+  (slot-value connection 'server-port))
+
+(defmethod (setf port) (port (connection node-connection))
+  (setf (slot-value connection 'server-port) port))
+
+(defun valid-plist-string-p (string &rest indicators)
+  (let ((parsed-plist (ignore-errors (read-from-string string))))
+	(when (and parsed-plist
+			   (every (lambda (id) (getf parsed-plist id))
+					  indicators))
+	  parsed-plist)))
+
+(defun initialize-connection (node connection)
+  (let* ((all-connections (all-nodes node))
+		 (join-message (valid-plist-string-p
+						(socket-timeout-read (node-connection-socket connection) 10.0)
+						:id :server-port)))
+	(when (null join-message)
+	  (error 'wired-request-parsing-failed))
+	(with-plist ((:id id)
+				 (:server-port server-port))
+		join-message
+	  (when (some (lambda (x) (string= (node-id x) id))
+				  (cons node all-connections))
+		(error 'wired-request-parsing-failed))
+	  (node-log node "Peer identified himself as ~a" id)
+	  (setf (node-id connection) id
+			(port connection) server-port))))
 
 (defmethod node-connection ((node wired-node) connection)
   (socket-stream-format (usocket:socket-stream (node-connection-socket connection))
-						"~a~%" (node-id node))
-  (let ((all-connections (all-nodes node))
-		(sent-id (socket-timeout-read (node-connection-socket connection) 10.0)))
-	(if (and sent-id (wired-node-id-p sent-id)
-			 (not (member sent-id all-connections :key #'connection-id :test #'equal))
-			 (not (string= sent-id (node-id node))))
-		(progn
-		  (node-log node "Peer identified himself as ~a" sent-id)
-		  (setf (connection-id connection) sent-id))
-		(progn
-		  (node-log node "Peer failed to identify itself!")
-		  (usocket:socket-close (node-connection-socket connection))
-		  (stop-node-connection connection)))))
+						"~a~%" (print-to-string (list :id (node-id node)
+													  :server-port (port node))))
+  (handler-case (initialize-connection node connection)
+	(wired-request-parsing-failed ()
+	  (node-log node "Peer failed to identify itself!")
+	  (usocket:socket-close (node-connection-socket connection))
+	  (stop-node-connection connection))))
 
 (defmethod node-deconnection ((node wired-node) connection)
   (with-slots (nodes-inbound nodes-outbound) node
@@ -104,11 +110,11 @@
 If it isn't, transmit it to the others nodes"
   (let ((destination-nodes (all-nodes node)))
 	(dolist (connection destination-nodes)
-	  (unless (member (connection-id connection) hops :test #'equal)
-		(node-log node "Sending to ~a" (connection-id connection))
+	  (unless (member (node-id connection) hops :test #'equal)
+		(node-log node "Sending to ~a" (node-id connection))
 		(send-message-to node connection
 						 (make-wired-message 'broadcast content
-											 (append (mapcar #'connection-id destination-nodes)
+											 (append (mapcar #'node-id destination-nodes)
 													 hops)))))))
 
 (defun wired-broadcast (node message)
@@ -122,17 +128,18 @@ If it isn't, transmit it to the others nodes"
 						   (read-from-string message)))))
 	(unless parsed-message (error 'wired-request-parsing-failed))
 	(node-log node "Got message: ~a" parsed-message)
-	(with-plist ((:action action)
-				 (:content content)
-				 (:hops hops))
+	(with-plist ((:action action))
 		parsed-message
-	  (when (or (some #'null (append (list action content)
-									 (when (eq action 'broadcast) hops))))
-		(error 'wired-request-parsing-failed))
+	  (unless action (error 'wired-request-parsing-failed))
 	  (ecase action
-		(broadcast						;Action broadcast, meaning: "send message to the whole network"
-		 (format t "=====ANON=====~%~a~%==============~%" content) ;Show that you recieved the message
-		 (transmit-wired-message node content hops))  ;And transmit it
+		(broadcast
+		 (with-plist ((:content content)
+					  (:hops hops))
+			 parsed-message
+		   (when (or (null content) (null hops))
+			 (error 'wired-request-parsing-failed))
+		   (format t "=====ANON=====~%~a~%==============~%" content) ;Show that you recieved the message
+		   (transmit-wired-message node content hops)))  ;And transmit it
 		(get-peers
 		 (send-message-to node connection
 						  (make-wired-message 'send-peers
@@ -141,12 +148,14 @@ If it isn't, transmit it to the others nodes"
 													  (remove connection (all-nodes node)))
 											  nil)))
 		(send-peers
-		 (mapcar (lambda (peer-plist)
-				   (with-plist ((:host host)
-								(:port port))
-					   peer-plist
-					 (when (or (null host) (null port))
-					   (error 'wired-request-parsing-failed))
-					 (connect-to-node node host port)))
-				 content))
+		 (with-plist ((:content hosts))
+			 parsed-message
+		   (mapcar (lambda (peer-plist)
+					 (with-plist ((:host host)
+								  (:port port))
+						 peer-plist
+					   (when (or (null host) (null port))
+						 (error 'wired-request-parsing-failed))
+					   (connect-to-node node host port)))
+				   hosts)))
 		(t (error 'wired-request-parsing-failed))))))
