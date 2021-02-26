@@ -5,8 +5,9 @@
   :author "Phi"
   :version "0.0.1"
   :serial t
-  :depends-on (#:alexandria #:usocket #:str #:bt-semaphore #:ironclad #:trivial-utf-8)
+  :depends-on (#:alexandria #:usocket #:str #:bt-semaphore #:ironclad #:trivial-utf-8 #:cl-intbytes)
   :components ((:file "package")
 			   (:file "utility")
 			   (:file "node")
+			   (:file "blockchain")
                (:file "wired")))

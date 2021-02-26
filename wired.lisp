@@ -4,8 +4,6 @@
 
 (in-package #:wired)
 
-(defparameter *wired-version* "0.1")
-
 (defun base-16-encode (array)
   "Return the string of the encoded byte array in base 16"
   (declare (type (array (unsigned-byte 8)) array))
@@ -26,7 +24,9 @@
 (defclass wired-node (node)
   ((id :reader node-id
 	   :initform (generate-id))
-   (connection-class :initform 'wired-node-connection))
+   (connection-class :initform 'wired-node-connection)
+   (current-chain :accessor wired-chain
+				  :initform (make-instance 'blockchain)))
   (:documentation "Node in the wired network"))
 
 (defclass wired-node-connection (node-connection)
@@ -97,6 +97,7 @@
 	   (print obj s))))
 
 (defun wired-node-id-p (id)
+  "Is the id a valid wired network id?"
   (declare (type string id))
   (= (length id) 128))
 
@@ -131,7 +132,7 @@ If it isn't, transmit it to the others nodes"
 	(with-plist ((:action action))
 		parsed-message
 	  (unless action (error 'wired-request-parsing-failed))
-	  (ecase action
+	  (case action
 		(broadcast
 		 (with-plist ((:content content)
 					  (:hops hops))
@@ -158,4 +159,4 @@ If it isn't, transmit it to the others nodes"
 						 (error 'wired-request-parsing-failed))
 					   (connect-to-node node host port)))
 				   hosts)))
-		(t (error 'wired-request-parsing-failed))))))
+		(otherwise (error 'wired-request-parsing-failed))))))
