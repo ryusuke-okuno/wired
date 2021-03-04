@@ -21,12 +21,47 @@
 														 :collect (the (unsigned-byte 8)
 																	   (random 255))))))
 
+(defclass wired-block (chain-block) ()
+  (:documentation "A block of the wired blockchain"))
+
+(defmethod initialize-instance :after ((chain-block wired-block) &key)
+  (when (null (block-contents chain-block))
+	(error "Must specify contents of the first block")))
+
+(defmethod encode-block ((chain-block wired-block))
+  (concatenate 'vector
+			   (trivial-utf-8:string-to-utf-8-bytes (block-contents chain-block))
+			   (call-next-method)))
+
+(defun wired-block-to-plist (wired-block)
+  (with-accessors ((proof proof-of-work)
+				   (contents block-contents)
+				   (id block-id))
+	  wired-block
+	(list :id id
+		  :proof-of-work proof
+		  :contents contents)))
+
+(defclass wired-blockchain (blockchain)
+  ((block-class :initform 'wired-block)
+   (node :initarg :node
+		 :initform (error "Must specify node!")))
+  (:documentation "The blockchain used to store the messages of the wired network"))
+
+(defun wired-chain-to-plist (blockchain since-index)
+  (with-accessors ((chain chain))
+	  blockchain
+	(let ((chain-slice-size (max 0 (- (length chain) since-index))))
+	  (map 'list #'wired-block-to-plist (make-array chain-slice-size
+													:displaced-to chain
+													:displaced-index-offset (min (length chain) since-index))))))
+
 (defclass wired-node (node)
   ((id :reader node-id
 	   :initform (generate-id))
    (connection-class :initform 'wired-node-connection)
-   (current-chain :accessor wired-chain
-				  :initform (make-instance 'blockchain)))
+   (current-chain :accessor node-blockchain
+				  :initform nil))
   (:documentation "Node in the wired network"))
 
 (defclass wired-node-connection (node-connection)
@@ -34,6 +69,12 @@
 	   :initform "Default id")
    (server-port :initform 4444))
   (:documentation "Connection to a wired node"))
+
+(defmethod initialize-instance :after ((node wired-node) &key)
+  (setf (node-blockchain node)
+		(make-instance 'wired-blockchain
+					   :content "Lisp is the most powerful programming language"
+					   :node node)))
 
 (defmethod port ((connection node-connection))
   (slot-value connection 'server-port))
@@ -109,54 +150,82 @@
 (defun transmit-wired-message (node content hops)
   "If the current node is the destination, add a new post.
 If it isn't, transmit it to the others nodes"
-  (let ((destination-nodes (all-nodes node)))
+  (let ((destination-nodes (remove-if (lambda (connection)
+										(member (node-id connection) hops :test #'equal))
+									  (all-nodes node))))
 	(dolist (connection destination-nodes)
-	  (unless (member (node-id connection) hops :test #'equal)
-		(node-log node "Sending to ~a" (node-id connection))
-		(send-message-to node connection
-						 (make-wired-message 'broadcast content
-											 (append (mapcar #'node-id destination-nodes)
-													 hops)))))))
+	  (node-log node "Sending to ~a" (node-id connection))
+	  (send-message-to node connection
+					   (make-wired-message 'broadcast content
+										   (alexandria:shuffle
+											(append (mapcar #'node-id destination-nodes) hops)))))))
 
 (defun wired-broadcast (node message)
   "Send a message to the rest of the world."
   (transmit-wired-message node message (list (node-id node))))
 
+(defun get-more-peers (node)
+  "Ask for more peers to all of the neightboring nodes"
+  (dolist (n (all-nodes node))
+	(send-message-to node n (make-wired-message 'get-peers nil nil))))
+
+(defmacro with-plist-error (bindings form &body body)
+  "Checks every element of the plist before using it"
+  `(with-plist ,(mapcar (alexandria:curry #'take 2) bindings) ,form
+	 (unless (and ,@(loop :for b :in bindings
+						  :when (null (caddr b))
+							:do (error "Must specify test function!")
+						  :collect `(funcall ,(caddr b) ,(cadr b))))
+	   (error 'wired-request-parsing-failed))
+	 ,@body))
+
+(defun wired-new-broadcast (node message)
+  (node-log node "Recieved message: ~a" message)
+  (with-plist-error ((:id id #'numberp)
+					 (:proof-of-work proof #'numberp)
+					 (:contents contents #'stringp))
+	  message
+	(transform-error adding-invalid-block wired-request-parsing-failed
+					 (add-block (node-blockchain node)
+								(make-instance 'wired-block
+											   :contents contents
+											   :proof-of-work proof
+											   :id id
+											   :previous-hash (hash (array-last (chain (node-blockchain node)))))))))
+
 (defun handle-wired-request (node connection message)
   "Handles a new sent request"
   (let ((parsed-message (ignore-errors
-						 (let ((*package* (find-package :wired)))
+						 (let ((*package* (find-package :wired))
+							   (*read-eval* nil))
 						   (read-from-string message)))))
 	(unless parsed-message (error 'wired-request-parsing-failed))
 	(node-log node "Got message: ~a" parsed-message)
-	(with-plist ((:action action))
+	(with-plist-error ((:action action #'symbolp))
 		parsed-message
-	  (unless action (error 'wired-request-parsing-failed))
 	  (case action
-		(broadcast
-		 (with-plist ((:content content)
-					  (:hops hops))
-			 parsed-message
-		   (when (or (null content) (null hops))
-			 (error 'wired-request-parsing-failed))
-		   (format t "=====ANON=====~%~a~%==============~%" content) ;Show that you recieved the message
-		   (transmit-wired-message node content hops)))  ;And transmit it
-		(get-peers
-		 (send-message-to node connection
-						  (make-wired-message 'send-peers
-											  (mapcar (lambda (c) (list :host (host c)
-																   :port (port c)))
-													  (remove connection (all-nodes node)))
-											  nil)))
-		(send-peers
-		 (with-plist ((:content hosts))
-			 parsed-message
-		   (mapcar (lambda (peer-plist)
-					 (with-plist ((:host host)
-								  (:port port))
-						 peer-plist
-					   (when (or (null host) (null port))
-						 (error 'wired-request-parsing-failed))
-					   (connect-to-node node host port)))
-				   hosts)))
+		(broadcast (with-plist-error ((:content content #'listp)
+									  (:hops hops #'listp))
+					   parsed-message
+					 (wired-new-broadcast node content)
+					 (transmit-wired-message node content hops)))
+		(get-peers (send-message-to node connection
+									(make-wired-message 'send-peers
+														(mapcar (lambda (c) (list :host (host c)
+																			 :port (port c)))
+																(remove connection (all-nodes node)))
+														nil)))
+		(send-peers (mapc (lambda (peer-plist)
+							(with-plist-error ((:host host #'stringp)
+											   (:port port #'numberp))
+								peer-plist
+							  (connect-to-node node host port)))
+						  (getf parsed-message :content)))
+		(get-chain (with-plist-error ((:content index #'numberp))
+					   parsed-message
+					 (send-message-to node connection
+									  (make-wired-message 'send-chain
+														  (wired-chain-to-plist (node-blockchain node)
+																				index)
+														  nil))))
 		(otherwise (error 'wired-request-parsing-failed))))))

@@ -1,16 +1,5 @@
 (in-package :wired)
 
-(defun take (n seq)
-  (subseq seq 0 n))
-
-(defun array-last (array)
-  (aref array (1- (length array))))
-
-(defun (setf array-last) (value array)
-  (setf (aref array (1- (length array))) value))
-
-(declaim (inline take))
-
 (defclass chain-block ()
   ((id :reader block-id
 	   :type (unsigned-byte 64)
@@ -31,11 +20,16 @@
 (defgeneric encode-block (chain-block)
   (:documentation "Transforms the block to a byte array"))
 
+(defgeneric verify-contents (chain-block)
+  (:documentation "Verifys the contents of the block"))
+
 (defmethod encode-block ((chain-block chain-block))
   (concatenate 'vector
 			   (previous-hash chain-block)
 			   (cl-intbytes:int64->octets (block-id chain-block))
 			   (cl-intbytes:int64->octets (proof-of-work chain-block))))
+
+(defmethod verify-contents ((chain-block chain-block)) t)
 
 (defun hash (chain-block)
   (with-slots (id proof-of-work) chain-block
@@ -51,12 +45,23 @@
 	  (ironclad:produce-digest digest))))
 
 (defun valid-hash-p (hash)
-  (every #'zerop (take 3 hash)))
+  (every #'zerop (take 2 hash)))
 
 (define-condition adding-invalid-block () ()
   (:report (lambda (condition stream)
 			 (declare (ignore condition))
 			 (format stream "Trying to add an invalid block to the blockchain!"))))
+
+(defgeneric more-recent-block-p (chain-block)
+  (:documentation "Has a more recent node been added to the global chain?"))
+
+(defmethod more-recent-block-p ((chain-block chain-block))
+  (declare (ignore chain-block)) nil)
+
+(define-condition more-recent-block () ()
+  (:report (lambda (condition stream)
+			 (declare (ignore condition))
+			 (format stream "A more recent block was added to the blockchain!"))))
 
 (defmethod initialize-instance :after ((chain-block chain-block) &key)
   (with-slots (proof-of-work) chain-block
@@ -66,7 +71,9 @@
 		(progn (setf proof-of-work 0)
 			   (loop :for hash = (hash chain-block)
 					 :until (valid-hash-p hash)
-					 :do (incf proof-of-work))))))
+					 :do (if (more-recent-block-p chain-block)
+							 (error 'more-recent-block)
+							 (incf proof-of-work)))))))
 
 (defclass blockchain ()
   ((chain :accessor chain
@@ -93,35 +100,45 @@
   (with-accessors ((chain chain)
 				   (class block-class))
 	  blockchain
-	(make-instance class
-				   :id (length chain)
-				   :previous-hash (hash (array-last chain))
-				   :contents contents)))
+	(handler-case (make-instance class
+								 :id (length chain)
+								 :previous-hash (hash (array-last chain))
+								 :contents contents)
+	  (more-recent-block ()
+		(format t "A new block has been added before us! Recalculating...~%")
+		(calculate-block blockchain contents)))))
 
 (defun update-chain (blockchain &optional (index 0))
   "Asks for the next blocks in the blockchain to peers after a
 particular index, and takes the longest."
   (with-accessors ((chain chain))
 	  blockchain
-	(let* ((new-chain (reduce (lambda (last-chain chain)
+	(let* ((since-index (max 0 (- (length chain) index)))
+		   (new-chain (reduce (lambda (last-chain chain)
 								(if (> (length last-chain)
 									   (length chain))
 									last-chain chain))
 							  (remove-if (complement #'verify-chain)
-										 (get-chains-since blockchain (max 0 (- (length chain) index))))))
+										 (get-chains-since blockchain since-index))))
 		   (first-block (aref new-chain 0)))
-	  (if (and (= (block-id first-block) (length chain))
+	  (if (and (= (block-id first-block) since-index)
 			   (equalp (hash (array-last chain))
 					   (previous-hash first-block)))
-		  (setf chain (concatenate 'vector chain new-chain))
+		  (setf chain
+				(make-array (+ since-index (length new-chain))
+							:initial-contents (concatenate 'vector
+														   (array-take since-index chain)
+														   new-chain)
+							:fill-pointer t
+							:adjustable t))
 		  (when (> (length new-chain) 4) ;We should probably trust this one
 			(update-chain blockchain 4))))))
 
 (defun add-block (blockchain chain-block)
   "Try to add a recived block to the chain"
   (labels ((verify-block (chain-block)
-			 (every #'= (previous-hash chain-block)
-					(hash (array-last (chain blockchain))))))
+			 (equalp (previous-hash chain-block)
+					 (hash (array-last (chain blockchain))))))
 	(with-accessors ((chain chain))
 		blockchain
 	  (cond ((= (block-id chain-block) (length chain)) ;If everything is okay, add to the chain
@@ -136,14 +153,14 @@ particular index, and takes the longest."
 
 (defun verify-chain (chain)
   "Verify chain order"
-  (and (= (block-id (aref chain 0)) 0)
-	   (reduce (lambda (last-block current-block)
-				 (and last-block
-					  (let ((last-hash (hash last-block)))
-						(when (and (every #'= last-hash (previous-hash current-block))
-								   (valid-hash-p last-hash)
-								   (valid-hash-p (hash current-block))
-								   (= (block-id last-block)
-									  (1- (block-id current-block))))
-						  current-block))))
-			   chain)))
+  (reduce (lambda (last-block current-block)
+			(and last-block
+				 (let ((last-hash (hash last-block)))
+				   (when (and (equalp last-hash (previous-hash current-block))
+							  (valid-hash-p last-hash)
+							  (valid-hash-p (hash current-block))
+							  (verify-contents current-block)
+							  (= (block-id last-block)
+								 (1- (block-id current-block))))
+					 current-block))))
+		  chain))
