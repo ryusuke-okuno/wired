@@ -68,3 +68,14 @@ To not use length."
 	 (,original (c)
 	   (declare (ignore c))
 	   (error ',transformed))))
+
+(defmacro doarray ((val array &optional index) &body body)
+  (let ((array-sym (gensym "array"))
+		(index-sym (or index (gensym "index"))))
+	`(let ((,array-sym ,array))
+	   (dotimes (,index-sym (length ,array-sym) ,array-sym)
+		 (let ((,val (aref ,array-sym ,index-sym)))
+		   ,@body)))))
+
+(doarray (a #(1 2 3 4 5 6 7) i)
+  (format t "A[~a] = ~a~%" i a))

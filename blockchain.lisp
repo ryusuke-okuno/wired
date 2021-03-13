@@ -108,31 +108,26 @@
 		(format t "A new block has been added before us! Recalculating...~%")
 		(calculate-block blockchain contents)))))
 
-(defun update-chain (blockchain &optional (index 0))
-  "Asks for the next blocks in the blockchain to peers after a
-particular index, and takes the longest."
+(defconstant +chain-trust-length+ 5)
+
+(defun update-chain (blockchain new-chain index)
+  "The consensus algorithm on wich chain is the right one"
   (with-accessors ((chain chain))
 	  blockchain
-	(let* ((since-index (max 0 (- (length chain) index)))
-		   (new-chain (reduce (lambda (last-chain chain)
-								(if (> (length last-chain)
-									   (length chain))
-									last-chain chain))
-							  (remove-if (complement #'verify-chain)
-										 (get-chains-since blockchain since-index))))
-		   (first-block (aref new-chain 0)))
-	  (if (and (= (block-id first-block) since-index)
-			   (equalp (hash (array-last chain))
+	(let ((first-block (aref new-chain 0)))
+	  (if (and (> (length new-chain) (- (length chain) index))
+			   (= (block-id first-block) index)
+			   (equalp (hash (aref chain (1- index)))
 					   (previous-hash first-block)))
 		  (setf chain
-				(make-array (+ since-index (length new-chain))
+				(make-array (+ index (length new-chain))
 							:initial-contents (concatenate 'vector
-														   (array-take since-index chain)
+														   (array-take index chain)
 														   new-chain)
 							:fill-pointer t
 							:adjustable t))
-		  (when (> (length new-chain) 4) ;We should probably trust this one
-			(update-chain blockchain 4))))))
+		  (when (> (length new-chain) +chain-trust-length+) ;We should probably trust this one
+			(get-chains-since blockchain (- index +chain-trust-length+)))))))
 
 (defun add-block (blockchain chain-block)
   "Try to add a recived block to the chain"

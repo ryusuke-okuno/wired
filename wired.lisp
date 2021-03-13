@@ -28,6 +28,11 @@
   (when (null (block-contents chain-block))
 	(error "Must specify contents of the first block")))
 
+(defmethod print-object ((chain-block wired-block) stream)
+  (format stream "#<WIRED-BLOCK N~d~%	Proof of work: ~a~%	Contents: ~a~%	Hash: ~a>"
+		  (block-id chain-block) (proof-of-work chain-block)
+		  (block-contents chain-block) (base-16-encode (hash chain-block))))
+
 (defmethod encode-block ((chain-block wired-block))
   (concatenate 'vector
 			   (trivial-utf-8:string-to-utf-8-bytes (block-contents chain-block))
@@ -52,9 +57,9 @@
   (with-accessors ((chain chain))
 	  blockchain
 	(let ((chain-slice-size (max 0 (- (length chain) since-index))))
-	  (map 'list #'wired-block-to-plist (make-array chain-slice-size
-													:displaced-to chain
-													:displaced-index-offset (min (length chain) since-index))))))
+	  (map 'vector #'wired-block-to-plist (make-array chain-slice-size
+													  :displaced-to chain
+													  :displaced-index-offset (min (length chain) since-index))))))
 
 (defclass wired-node (node)
   ((id :reader node-id
@@ -84,7 +89,7 @@
 
 (defun valid-plist-string-p (string &rest indicators)
   (let ((parsed-plist (ignore-errors (read-from-string string))))
-	(when (and parsed-plist
+	(when (and (listp parsed-plist)
 			   (every (lambda (id) (getf parsed-plist id))
 					  indicators))
 	  parsed-plist)))
@@ -224,8 +229,29 @@ If it isn't, transmit it to the others nodes"
 		(get-chain (with-plist-error ((:content index #'numberp))
 					   parsed-message
 					 (send-message-to node connection
-									  (make-wired-message 'send-chain
-														  (wired-chain-to-plist (node-blockchain node)
-																				index)
-														  nil))))
+									  (print-to-string (list :action 'send-chain
+															 :content (wired-chain-to-plist (node-blockchain node) index)
+															 :index index)))))
+		(send-chain (with-plist-error ((:content new-chain #'vectorp)
+									   (:index index #'numberp))
+						parsed-message
+					  (update-chain (node-blockchain node)
+									(let ((chain (make-array 0 :adjustable t
+															   :fill-pointer t)))
+									  (doarray (new-block new-chain)
+										(with-plist-error ((:proof-of-work proof #'numberp)
+														   (:id id #'numberp)
+														   (:contents contents #'stringp))
+											new-block
+										  (vector-push-extend (make-instance 'wired-block
+																			 :proof-of-work proof
+																			 :id id
+																			 :contents contents
+																			 :previous-hash (if (= id index)
+																								(hash (aref (chain (node-blockchain node))
+																											(1- index)))
+																								(hash (aref chain (1- (- id index))))))
+															  chain)))
+									  chain)
+									index)))
 		(otherwise (error 'wired-request-parsing-failed))))))
