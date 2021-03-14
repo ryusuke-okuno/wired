@@ -65,15 +65,13 @@
 
 (defmethod initialize-instance :after ((chain-block chain-block) &key)
   (with-slots (proof-of-work) chain-block
-	(if proof-of-work
-		(unless (valid-hash-p (hash chain-block))
-		  (error 'adding-invalid-block))
-		(progn (setf proof-of-work 0)
-			   (loop :for hash = (hash chain-block)
-					 :until (valid-hash-p hash)
-					 :do (if (more-recent-block-p chain-block)
-							 (error 'more-recent-block)
-							 (incf proof-of-work)))))))
+	(unless proof-of-work
+	  (setf proof-of-work 0)
+	  (loop :for hash = (hash chain-block)
+			:until (valid-hash-p hash)
+			:do (if (more-recent-block-p chain-block)
+					(error 'more-recent-block)
+					(incf proof-of-work))))))
 
 (defclass blockchain ()
   ((chain :accessor chain
@@ -132,18 +130,16 @@
 (defun add-block (blockchain chain-block)
   "Try to add a recived block to the chain"
   (labels ((verify-block (chain-block)
-			 (equalp (previous-hash chain-block)
-					 (hash (array-last (chain blockchain))))))
+			 (and (equalp (previous-hash chain-block)
+						  (hash (array-last (chain blockchain))))
+				  (valid-hash-p (hash chain-block)))))
 	(with-accessors ((chain chain))
 		blockchain
 	  (cond ((= (block-id chain-block) (length chain)) ;If everything is okay, add to the chain
 			 (when (verify-block chain-block)
 			   (vector-push-extend chain-block chain)))
 			((> (block-id chain-block) (length chain)) ;If the block id is superior, it means we missed blocks
-			 (update-chain blockchain)
-			 (when (and (= (block-id chain-block) (length chain))
-						  (verify-block chain-block))
-			   (vector-push-extend chain-block chain)))
+			 (get-chains-since blockchain (length chain)))
 			(t (error 'adding-invalid-block))))))
 
 (defun verify-chain (chain)

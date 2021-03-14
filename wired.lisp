@@ -198,6 +198,19 @@ If it isn't, transmit it to the others nodes"
 											   :id id
 											   :previous-hash (hash (array-last (chain (node-blockchain node)))))))))
 
+(defun wired-node-new-block (node contents)
+  (with-accessors ((blockchain node-blockchain))
+	  node
+	(let ((new-block (calculate-block blockchain contents)))
+	  (add-block blockchain new-block)
+	  (wired-broadcast node (wired-block-to-plist new-block)))))
+
+(defmethod get-chains-since ((blockchain wired-blockchain) index)
+  (with-slots (node) blockchain
+	(dolist (connection (all-nodes node))
+	  (send-message-to node connection
+					   (make-wired-message 'get-chain index nil)))))
+
 (defun handle-wired-request (node connection message)
   "Handles a new sent request"
   (let ((parsed-message (ignore-errors
@@ -243,15 +256,16 @@ If it isn't, transmit it to the others nodes"
 														   (:id id #'numberp)
 														   (:contents contents #'stringp))
 											new-block
-										  (vector-push-extend (make-instance 'wired-block
-																			 :proof-of-work proof
-																			 :id id
-																			 :contents contents
-																			 :previous-hash (if (= id index)
-																								(hash (aref (chain (node-blockchain node))
-																											(1- index)))
-																								(hash (aref chain (1- (- id index))))))
-															  chain)))
+										  (transform-error adding-invalid-block wired-request-parsing-failed
+														   (vector-push-extend (make-instance 'wired-block
+																							  :proof-of-work proof
+																							  :id id
+																							  :contents contents
+																							  :previous-hash (if (= id index)
+																												 (hash (aref (chain (node-blockchain node))
+																															 (1- index)))
+																												 (hash (aref chain (1- (- id index))))))
+																			   chain))))
 									  chain)
 									index)))
 		(otherwise (error 'wired-request-parsing-failed))))))
