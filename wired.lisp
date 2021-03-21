@@ -4,6 +4,8 @@
 
 (in-package #:wired)
 
+(setf *random-state* (make-random-state t))
+
 (defun base-16-encode (array)
   "Return the string of the encoded byte array in base 16"
   (declare (type (array (unsigned-byte 8)) array))
@@ -162,8 +164,8 @@ If it isn't, transmit it to the others nodes"
 	  (node-log node "Sending to ~a" (node-id connection))
 	  (send-message-to node connection
 					   (make-wired-message 'broadcast content
-										   (alexandria:shuffle
-											(append (mapcar #'node-id destination-nodes) hops)))))))
+										   ;; alexandria:shuffle
+										   (append (mapcar #'node-id destination-nodes) hops))))))
 
 (defun wired-broadcast (node message)
   "Send a message to the rest of the world."
@@ -201,7 +203,9 @@ If it isn't, transmit it to the others nodes"
 (defun wired-node-new-block (node contents)
   (with-accessors ((blockchain node-blockchain))
 	  node
-	(let ((new-block (calculate-block blockchain contents)))
+	(let ((new-block (calculate-block blockchain
+									  (str:replace-all "
+" "" contents))))
 	  (add-block blockchain new-block)
 	  (wired-broadcast node (wired-block-to-plist new-block)))))
 
@@ -210,6 +214,16 @@ If it isn't, transmit it to the others nodes"
 	(dolist (connection (all-nodes node))
 	  (send-message-to node connection
 					   (make-wired-message 'get-chain index nil)))))
+
+(defun get-regular-peers (&optional (path "peers.txt"))
+  (mapcar (lambda (raw-line)
+			(let ((pos (position #\: raw-line)))
+			  (unless pos (error "Error in peers file!"))
+			  (list (subseq raw-line 0 pos)
+					(parse-integer (subseq raw-line (1+ pos))))))
+		  (str:split "
+" (alexandria:read-file-into-string path)
+:omit-nulls t)))
 
 (defun handle-wired-request (node connection message)
   "Handles a new sent request"
@@ -239,7 +253,9 @@ If it isn't, transmit it to the others nodes"
 								peer-plist
 							  (connect-to-node node host port)))
 						  (getf parsed-message :content)))
-		(get-chain (with-plist-error ((:content index #'numberp))
+		(get-chain (with-plist-error ((:content index (lambda (x)
+														(and (numberp x)
+															 (>= x 1)))))
 					   parsed-message
 					 (send-message-to node connection
 									  (print-to-string (list :action 'send-chain

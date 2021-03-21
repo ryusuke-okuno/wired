@@ -76,3 +76,8 @@ To not use length."
 	   (dotimes (,index-sym (length ,array-sym) ,array-sym)
 		 (let ((,val (aref ,array-sym ,index-sym)))
 		   ,@body)))))
+
+(defmacro define-variables (&rest args)
+  `(progn
+	 ,@(loop :until (null args)
+			 :collect `(defparameter ,(pop args) ,(pop args)))))

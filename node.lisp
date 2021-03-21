@@ -97,7 +97,7 @@
 		  master-socket (usocket:socket-listen host port :reuse-address t)
 		  server-thread (bt:make-thread
 						 (lambda ()
-						   (node-log node "Starting server...")
+						   (node-log node "Starting server on port ~d..." port)
 						   (unwind-protect
 								(loop (push (make-instance connection-class
 														   :main-node node

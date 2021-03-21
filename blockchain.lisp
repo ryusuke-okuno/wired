@@ -115,6 +115,7 @@
 	(let ((first-block (aref new-chain 0)))
 	  (if (and (> (length new-chain) (- (length chain) index))
 			   (= (block-id first-block) index)
+			   (verify-chain new-chain)
 			   (equalp (hash (aref chain (1- index)))
 					   (previous-hash first-block)))
 		  (setf chain
@@ -124,8 +125,9 @@
 														   new-chain)
 							:fill-pointer t
 							:adjustable t))
-		  (when (> (length new-chain) +chain-trust-length+) ;We should probably trust this one
-			(get-chains-since blockchain (- index +chain-trust-length+)))))))
+		  (when (and (> (length new-chain) +chain-trust-length+)
+					 (> index 1)) ;We should probably trust this one
+			(get-chains-since blockchain 1))))))
 
 (defun add-block (blockchain chain-block)
   "Try to add a recived block to the chain"
