@@ -52,27 +52,6 @@
 			 (declare (ignore condition))
 			 (format stream "Trying to add an invalid block to the blockchain!"))))
 
-(defgeneric more-recent-block-p (chain-block)
-  (:documentation "Has a more recent node been added to the global chain?"))
-
-(defmethod more-recent-block-p ((chain-block chain-block))
-  (declare (ignore chain-block)) nil)
-
-(define-condition more-recent-block () ()
-  (:report (lambda (condition stream)
-			 (declare (ignore condition))
-			 (format stream "A more recent block was added to the blockchain!"))))
-
-(defmethod initialize-instance :after ((chain-block chain-block) &key)
-  (with-slots (proof-of-work) chain-block
-	(unless proof-of-work
-	  (setf proof-of-work 0)
-	  (loop :for hash = (hash chain-block)
-			:until (valid-hash-p hash)
-			:do (if (more-recent-block-p chain-block)
-					(error 'more-recent-block)
-					(incf proof-of-work))))))
-
 (defclass blockchain ()
   ((chain :accessor chain
 		  :initform (make-array 0 :element-type 'chain-block
@@ -82,12 +61,35 @@
 				:reader block-class))
   (:documentation "Blockchain class, that keeps a copy of every transaction and its hash"))
 
+(defgeneric more-recent-block-p (chain-block blockchain)
+  (:documentation "Has a more recent node been added to the blockchain?"))
+
+(defmethod more-recent-block-p (chain-block (blockchain blockchain))
+  (declare (ignore chain-block)) nil)
+
+(define-condition more-recent-block () ()
+  (:report (lambda (condition stream)
+			 (declare (ignore condition))
+			 (format stream "A more recent block was added to the blockchain!"))))
+
+(defmethod initialize-instance :after ((chain-block chain-block)
+									   &key (blockchain (error "Must specify blockchain")))
+  (with-slots (proof-of-work) chain-block
+	(unless proof-of-work
+	  (setf proof-of-work 0)
+	  (loop :for hash = (hash chain-block)
+			:until (valid-hash-p hash)
+			:do (if (more-recent-block-p chain-block blockchain)
+					(error 'more-recent-block)
+					(incf proof-of-work))))))
+
 (defmethod initialize-instance :after ((blockchain blockchain) &key content)
   (vector-push-extend (make-instance (block-class blockchain)
 									 :id 0
 									 :previous-hash (make-array 64 :element-type '(unsigned-byte 8)
 																   :initial-element 0)
-									 :contents content)
+									 :contents content
+									 :blockchain blockchain)
 					  (chain blockchain)))
 
 (defgeneric get-chains-since (blockchain index)
@@ -101,6 +103,7 @@
 	(handler-case (make-instance class
 								 :id (length chain)
 								 :previous-hash (hash (array-last chain))
+								 :blockchain blockchain
 								 :contents contents)
 	  (more-recent-block ()
 		(format t "A new block has been added before us! Recalculating...~%")

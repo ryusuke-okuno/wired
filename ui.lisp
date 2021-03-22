@@ -1,6 +1,6 @@
 (in-package :wired)
 
-(defparameter *node* (make-instance 'wired-node :port (+ 1000 (random 9999))))
+(defparameter *node* (make-instance 'wired-node :port 4444))
 
 (defun peers-count ()
   (format nil "Connected to ~d peers" (length (all-nodes *node*))))
@@ -17,6 +17,9 @@
 		  (chain (node-blockchain *node*))
 		  :initial-value ""))
 
+(defun list-peers ()
+  (format nil "Connected to ~a peers" (length (all-nodes *node*))))
+
 (defun main ()
   (ltk:with-ltk ()
 	(let* ((posting-frame (make-instance 'ltk:frame :borderwidth 10))
@@ -28,12 +31,18 @@
 												  (wired-node-new-block *node* (ltk:text post-text))
 												  (setf (ltk:text post-text) ""))
 									   :master posting-frame))
+		   (peers-label (make-instance 'ltk:label :text "Not connected"
+												  :master posting-frame))
 		   (posts-label (make-instance 'ltk:label :text "No posts")))
+	  (ltk:pack peers-label)
 	  (ltk:pack post-text)
 	  (ltk:pack post-button)
 	  (ltk:pack posting-frame :side :left)
 	  (ltk:pack posts-label :side :right)
+	  (wired-connect)
+	  (get-more-peers *node*)
 	  (labels ((update ()
-				 (setf (ltk:text posts-label) (list-posts))
+				 (setf (ltk:text posts-label) (list-posts)
+					   (ltk:text peers-label) (list-peers))
 				 (ltk:after 5000 #'update)))
 		(update)))))

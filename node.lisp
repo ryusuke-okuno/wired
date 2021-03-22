@@ -141,7 +141,7 @@
 
 (defun node-log (node control-string &rest arguments)
   (apply #'locked-format `(,(node-output node)
-						   ,(str:concat "[S] " control-string "~%") ,@arguments)))
+						   ,(str:concat "[" (subseq (node-id node) 0 8) "] " control-string "~%") ,@arguments)))
 
 (defun delete-closed-connections (node)
   "Remove connections that have been closed."

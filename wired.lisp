@@ -171,10 +171,13 @@ If it isn't, transmit it to the others nodes"
   "Send a message to the rest of the world."
   (transmit-wired-message node message (list (node-id node))))
 
+(defconstant +max-peers+ 20)
+
 (defun get-more-peers (node)
   "Ask for more peers to all of the neightboring nodes"
-  (dolist (n (all-nodes node))
-	(send-message-to node n (make-wired-message 'get-peers nil nil))))
+  (when (< (length (all-nodes node)) +max-peers+)
+	(dolist (n (all-nodes node))
+	  (send-message-to node n (make-wired-message 'get-peers nil nil)))))
 
 (defmacro with-plist-error (bindings form &body body)
   "Checks every element of the plist before using it"
@@ -215,6 +218,9 @@ If it isn't, transmit it to the others nodes"
 	  (send-message-to node connection
 					   (make-wired-message 'get-chain index nil)))))
 
+(defmethod more-recent-block-p (chain-block (blockchain wired-blockchain))
+  )										 ;TODO!!!!!
+
 (defun get-regular-peers (&optional (path "peers.txt"))
   (mapcar (lambda (raw-line)
 			(let ((pos (position #\: raw-line)))
@@ -241,12 +247,14 @@ If it isn't, transmit it to the others nodes"
 					   parsed-message
 					 (wired-new-broadcast node content)
 					 (transmit-wired-message node content hops)))
-		(get-peers (send-message-to node connection
-									(make-wired-message 'send-peers
-														(mapcar (lambda (c) (list :host (host c)
-																			 :port (port c)))
-																(remove connection (all-nodes node)))
-														nil)))
+		(get-peers (let ((other-peers (remove connection (all-nodes node))))
+					 (when other-peers
+					   (send-message-to node connection
+										(make-wired-message 'send-peers
+															(mapcar (lambda (c) (list :host (host c)
+																				 :port (port c)))
+																	other-peers)
+															nil)))))
 		(send-peers (mapc (lambda (peer-plist)
 							(with-plist-error ((:host host #'stringp)
 											   (:port port #'numberp))
