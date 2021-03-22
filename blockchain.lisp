@@ -57,6 +57,8 @@
 		  :initform (make-array 0 :element-type 'chain-block
 								  :adjustable t
 								  :fill-pointer t))
+   (chain-lock :accessor chain-lock
+			   :initform (bt:make-lock "Chain lock"))
    (block-class :initform 'chain-block
 				:reader block-class))
   (:documentation "Blockchain class, that keeps a copy of every transaction and its hash"))
@@ -113,25 +115,26 @@
 
 (defun update-chain (blockchain new-chain index)
   "The consensus algorithm on wich chain is the right one"
-  (with-accessors ((chain chain))
-	  blockchain
-	(let ((first-block (aref new-chain 0)))
-	  (if (and (> (length new-chain) (- (length chain) index))
-			   (= (block-id first-block) index)
-			   (verify-chain new-chain)
-			   (equalp (hash (aref chain (1- index)))
-					   (previous-hash first-block)))
-		  (setf chain
-				(make-array (+ index (length new-chain))
-							:initial-contents (concatenate 'vector
-														   (array-take index chain)
-														   new-chain)
-							:fill-pointer t
-							:element-type 'chain-block
-							:adjustable t))
-		  (when (and (> (length new-chain) +chain-trust-length+)
-					 (> index 1)) ;We should probably trust this one
-			(get-chains-since blockchain 1))))))
+  (when (> (length new-chain) 0)
+	(with-accessors ((chain chain))
+		blockchain
+	  (let ((first-block (aref new-chain 0)))
+		(if (and (> (length new-chain) (- (length chain) index))
+				 (= (block-id first-block) index)
+				 (verify-chain new-chain)
+				 (equalp (hash (aref chain (1- index)))
+						 (previous-hash first-block)))
+			(setf chain
+				  (make-array (+ index (length new-chain))
+							  :initial-contents (concatenate 'vector
+															 (array-take index chain)
+															 new-chain)
+							  :fill-pointer t
+							  :element-type 'chain-block
+							  :adjustable t))
+			(when (and (> (length new-chain) +chain-trust-length+)
+					   (> index 1)) ;We should probably trust this one
+			  (get-chains-since blockchain 1)))))))
 
 (defun add-block (blockchain chain-block)
   "Try to add a recived block to the chain"
@@ -143,7 +146,8 @@
 		blockchain
 	  (cond ((= (block-id chain-block) (length chain)) ;If everything is okay, add to the chain
 			 (when (verify-block chain-block)
-			   (vector-push-extend chain-block chain)))
+			   (bt:with-lock-held ((chain-lock blockchain))
+				 (vector-push-extend chain-block chain))))
 			((> (block-id chain-block) (length chain)) ;If the block id is superior, it means we missed blocks
 			 (get-chains-since blockchain (length chain)))
 			(t (error 'adding-invalid-block))))))

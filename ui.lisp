@@ -41,6 +41,7 @@
 	  (ltk:pack post-button)
 	  (ltk:pack posting-frame :side :left)
 	  (ltk:pack posts-label :side :right)
+	  (get-chains-since (node-blockchain *node*) 1)
 	  (get-more-peers *node*)
 	  (labels ((update ()
 				 (setf (ltk:text posts-label) (list-posts)
