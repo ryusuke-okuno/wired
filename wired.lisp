@@ -201,7 +201,8 @@ If it isn't, transmit it to the others nodes"
 											   :contents contents
 											   :proof-of-work proof
 											   :id id
-											   :previous-hash (hash (array-last (chain (node-blockchain node)))))))))
+											   :previous-hash (hash (array-last (chain (node-blockchain node))))
+											   :blockchain (node-blockchain node))))))
 
 (defun wired-node-new-block (node contents)
   (with-accessors ((blockchain node-blockchain))
@@ -219,7 +220,9 @@ If it isn't, transmit it to the others nodes"
 					   (make-wired-message 'get-chain index nil)))))
 
 (defmethod more-recent-block-p (chain-block (blockchain wired-blockchain))
-  )										 ;TODO!!!!!
+  (when (array-last (chain blockchain))
+	(>= (block-id (array-last (chain blockchain)))
+		(block-id chain-block))))
 
 (defun get-regular-peers (&optional (path "peers.txt"))
   (mapcar (lambda (raw-line)
@@ -285,10 +288,13 @@ If it isn't, transmit it to the others nodes"
 																							  :proof-of-work proof
 																							  :id id
 																							  :contents contents
-																							  :previous-hash (if (= id index)
-																												 (hash (aref (chain (node-blockchain node))
-																															 (1- index)))
-																												 (hash (aref chain (1- (- id index))))))
+																							  :previous-hash (let ((res
+																													 (if (= id index)
+																														 (hash (aref (chain (node-blockchain node))
+																																	 (1- index)))
+																														 (hash (aref chain (1- (- id index)))))))
+																											   res)
+																							  :blockchain (node-blockchain node))
 																			   chain))))
 									  chain)
 									index)))

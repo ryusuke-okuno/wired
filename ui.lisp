@@ -20,6 +20,8 @@
 (defun list-peers ()
   (format nil "Connected to ~a peers" (length (all-nodes *node*))))
 
+(wired-connect)
+
 (defun main ()
   (ltk:with-ltk ()
 	(let* ((posting-frame (make-instance 'ltk:frame :borderwidth 10))
@@ -39,7 +41,6 @@
 	  (ltk:pack post-button)
 	  (ltk:pack posting-frame :side :left)
 	  (ltk:pack posts-label :side :right)
-	  (wired-connect)
 	  (get-more-peers *node*)
 	  (labels ((update ()
 				 (setf (ltk:text posts-label) (list-posts)

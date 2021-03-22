@@ -38,7 +38,8 @@ To not use length."
   (subseq seq 0 n))
 
 (defun array-last (array)
-  (aref array (1- (length array))))
+  (when (> (length array) 0)
+	(aref array (1- (length array)))))
 
 (defun (setf array-last) (value array)
   (setf (aref array (1- (length array))) value))

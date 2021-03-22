@@ -127,6 +127,7 @@
 														   (array-take index chain)
 														   new-chain)
 							:fill-pointer t
+							:element-type 'chain-block
 							:adjustable t))
 		  (when (and (> (length new-chain) +chain-trust-length+)
 					 (> index 1)) ;We should probably trust this one
