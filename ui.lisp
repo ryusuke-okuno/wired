@@ -36,7 +36,7 @@
 													(setf (ltk:text post-text) "Calculating the proof of work...")
 												    (bt:make-thread
 													 (lambda ()
-													   (wired-node-new-block *node* message)
+													   (wired-new-block *node* message)
 													   (queues:qpush *ui-messages* 'calculated))
 													 :name "Calculation thread")))
 									   :master posting-frame))

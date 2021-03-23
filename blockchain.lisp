@@ -12,7 +12,7 @@
    (proof-of-work :accessor proof-of-work
 				  :type (unsigned-byte 64)
 				  :initarg :proof-of-work
-				  :initform nil)
+				  :initform 0)
    (contents :initarg :contents
 			 :initform nil
 			 :reader block-contents)))
