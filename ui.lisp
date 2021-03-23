@@ -1,6 +1,6 @@
 (in-package :wired)
 
-(defparameter *node* (make-instance 'wired-node :port 4444))
+(defparameter *node* (make-instance 'wired-node :port 4445))
 
 (defun peers-count ()
   (format nil "Connected to ~d peers" (length (all-nodes *node*))))
@@ -14,13 +14,15 @@
   (reduce (lambda (last-block block)
 			(str:concat last-block (format nil "======POST N~a======~%~a~%"
 										   (block-id block) (block-contents block))))
-		  (chain (node-blockchain *node*))
+		  (reverse (chain (node-blockchain *node*)))
 		  :initial-value ""))
 
 (defun list-peers ()
   (format nil "Connected to ~a peers" (length (all-nodes *node*))))
 
 (wired-connect)
+
+(defparameter *ui-messages* (queues:make-queue :simple-cqueue))
 
 (defun main ()
   (ltk:with-ltk ()
@@ -30,8 +32,13 @@
 		   (post-button (make-instance 'ltk:button
 									   :text "Post"
 									   :command (lambda ()
-												  (wired-node-new-block *node* (ltk:text post-text))
-												  (setf (ltk:text post-text) ""))
+												  (let ((message (ltk:text post-text)))
+													(setf (ltk:text post-text) "Calculating the proof of work...")
+												    (bt:make-thread
+													 (lambda ()
+													   (wired-node-new-block *node* message)
+													   (queues:qpush *ui-messages* 'calculated))
+													 :name "Calculation thread")))
 									   :master posting-frame))
 		   (peers-label (make-instance 'ltk:label :text "Not connected"
 												  :master posting-frame))
@@ -46,5 +53,11 @@
 	  (labels ((update ()
 				 (setf (ltk:text posts-label) (list-posts)
 					   (ltk:text peers-label) (list-peers))
-				 (ltk:after 5000 #'update)))
+				 (multiple-value-bind (message not-empty)
+					 (queues:qpop *ui-messages*)
+				   (when not-empty
+					 (case message
+					   (calculated (setf (ltk:text post-text) ""))
+					   (otherwise (format t "Wrong message!")))))
+				 (ltk:after 1000 #'update)))
 		(update)))))

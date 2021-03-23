@@ -35,7 +35,7 @@
 		  (block-id chain-block) (proof-of-work chain-block)
 		  (block-contents chain-block) (base-16-encode (hash chain-block))))
 
-(defmethod encode-block ((chain-block wired-block))
+(defmethod encode-block ((chain-block wired-block) &optional proof-of-work)
   (concatenate 'vector
 			   (trivial-utf-8:string-to-utf-8-bytes (block-contents chain-block))
 			   (call-next-method)))
@@ -204,7 +204,7 @@ If it isn't, transmit it to the others nodes"
 											   :previous-hash (hash (array-last (chain (node-blockchain node))))
 											   :blockchain (node-blockchain node))))))
 
-(defun wired-node-new-block (node contents)
+(defun wired-new-block (node contents)
   (with-accessors ((blockchain node-blockchain))
 	  node
 	(let ((new-block (calculate-block blockchain

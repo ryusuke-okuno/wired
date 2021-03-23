@@ -17,24 +17,24 @@
 			 :initform nil
 			 :reader block-contents)))
 
-(defgeneric encode-block (chain-block)
+(defgeneric encode-block (chain-block &optional proof-of-work)
   (:documentation "Transforms the block to a byte array"))
 
 (defgeneric verify-contents (chain-block)
   (:documentation "Verifys the contents of the block"))
 
-(defmethod encode-block ((chain-block chain-block))
+(defmethod encode-block ((chain-block chain-block) &optional proof-of-work)
   (concatenate 'vector
 			   (previous-hash chain-block)
 			   (cl-intbytes:int64->octets (block-id chain-block))
-			   (cl-intbytes:int64->octets (proof-of-work chain-block))))
+			   (cl-intbytes:int64->octets (or proof-of-work (proof-of-work chain-block)))))
 
 (defmethod verify-contents ((chain-block chain-block)) t)
 
-(defun hash (chain-block)
+(defun hash (chain-block &optional pow)
   (with-slots (id proof-of-work) chain-block
 	(let* ((digest (ironclad:make-digest :sha256))
-		   (block-bytes (encode-block chain-block))
+		   (block-bytes (encode-block chain-block (or pow proof-of-work)))
 		   (raw-block (make-array (length block-bytes)
 								  :initial-element 0
 								  :element-type '(unsigned-byte 8))))
@@ -45,7 +45,7 @@
 	  (ironclad:produce-digest digest))))
 
 (defun valid-hash-p (hash)
-  (every #'zerop (take 2 hash)))
+  (every #'zerop (take 3 hash)))
 
 (define-condition adding-invalid-block () ()
   (:report (lambda (condition stream)
@@ -77,13 +77,27 @@
 (defmethod initialize-instance :after ((chain-block chain-block)
 									   &key (blockchain (error "Must specify blockchain")))
   (with-slots (proof-of-work) chain-block
-	(unless proof-of-work
-	  (setf proof-of-work 0)
-	  (loop :for hash = (hash chain-block)
-			:until (valid-hash-p hash)
-			:do (if (more-recent-block-p chain-block blockchain)
-					(error 'more-recent-block)
-					(incf proof-of-work))))))
+	(let ((finished (make-instance 'atomic-event))
+		  (more-recent-block (make-instance 'atomic-event)))
+	  (labels ((calculate-proof-of-work (id size)
+				 (let ((local-proof (floor (* id (/ 18446744073709551615 size)))))
+				   (loop :for hash = (hash chain-block local-proof)
+						 :until (or (valid-hash-p hash) (event-get finished)
+									(event-get more-recent-block))
+						 :do (if (more-recent-block-p chain-block blockchain)
+								 (event-set more-recent-block)
+								 (incf local-proof)))
+				   (unless (or (event-get finished)
+							   (event-get more-recent-block))
+					 (event-set finished)
+					 (setf proof-of-work local-proof)))))
+		(bt:join-thread
+		 (let ((cpu-count (serapeum:count-cpus)))
+		   (car (loop :for x :below cpu-count
+					  :collect (bt:make-thread (lambda () (calculate-proof-of-work x cpu-count))
+											   :name (format nil "Hashing thread ~a" cpu-count))))))
+		(when (event-get more-recent-block)
+		  (error 'more-recent-block))))))
 
 (defmethod initialize-instance :after ((blockchain blockchain) &key content)
   (vector-push-extend (make-instance (block-class blockchain)

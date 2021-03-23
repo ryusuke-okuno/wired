@@ -14,6 +14,7 @@
 			   #:cl-intbytes
 			   #:array-operations
 			   #:ltk
+			   #:serapeum
 			   #:queues.simple-cqueue)
   :components ((:file "package")
 			   (:file "utility")
