@@ -221,9 +221,11 @@ If it isn't, transmit it to the others nodes"
 					   (make-wired-message 'get-chain index nil)))))
 
 (defmethod more-recent-block-p (chain-block (blockchain wired-blockchain))
-  (when (array-last (chain blockchain))
-	(>= (block-id (array-last (chain blockchain)))
-		(block-id chain-block))))
+  (let ((last (bt:with-lock-held ((chain-lock blockchain))
+				(array-last (chain blockchain)))))
+	(when last
+	  (>= (block-id last)
+		  (block-id chain-block)))))
 
 (defun get-regular-peers (&optional (path "peers.txt"))
   (mapcar (lambda (raw-line)

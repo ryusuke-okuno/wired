@@ -140,14 +140,15 @@
 				 (verify-chain new-chain)
 				 (equalp (hash (aref chain (1- index)))
 						 (previous-hash first-block)))
-			(setf chain
-				  (make-array (+ index (length new-chain))
-							  :initial-contents (concatenate 'vector
-															 (array-take index chain)
-															 new-chain)
-							  :fill-pointer t
-							  :element-type 'chain-block
-							  :adjustable t))
+			(bt:with-lock-held ((chain-lock blockchain))
+			  (setf chain
+					(make-array (+ index (length new-chain))
+								:initial-contents (concatenate 'vector
+															   (array-take index chain)
+															   new-chain)
+								:fill-pointer t
+								:element-type 'chain-block
+								:adjustable t)))
 			(when (and (> (length new-chain) +chain-trust-length+)
 					   (> index 1)) ;We should probably trust this one
 			  (get-chains-since blockchain 1)))))))
