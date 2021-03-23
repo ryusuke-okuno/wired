@@ -91,20 +91,22 @@
 							   (event-get more-recent-block))
 					 (event-set finished)
 					 (setf proof-of-work local-proof)))))
-		(bt:join-thread
-		 (let ((cpu-count (serapeum:count-cpus)))
-		   (car (loop :for x :below cpu-count
-					  :collect (bt:make-thread (lambda () (calculate-proof-of-work x cpu-count))
-											   :name (format nil "Hashing thread ~a" cpu-count))))))
-		(when (event-get more-recent-block)
-		  (error 'more-recent-block))))))
+		(unless (valid-hash-p (hash chain-block))
+		  (bt:join-thread
+		   (let ((cpu-count (serapeum:count-cpus)))
+			 (car (loop :for x :below cpu-count
+						:collect (bt:make-thread (lambda () (calculate-proof-of-work x cpu-count))
+												 :name (format nil "Hashing thread ~a" cpu-count))))))
+		  (when (event-get more-recent-block)
+			(error 'more-recent-block)))))))
 
-(defmethod initialize-instance :after ((blockchain blockchain) &key content)
+(defmethod initialize-instance :after ((blockchain blockchain) &key content content-pow)
   (vector-push-extend (make-instance (block-class blockchain)
 									 :id 0
 									 :previous-hash (make-array 64 :element-type '(unsigned-byte 8)
 																   :initial-element 0)
 									 :contents content
+									 :proof-of-work content-pow
 									 :blockchain blockchain)
 					  (chain blockchain)))
 
