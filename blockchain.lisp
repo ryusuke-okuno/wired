@@ -12,7 +12,7 @@
    (proof-of-work :accessor proof-of-work
 				  :type (unsigned-byte 64)
 				  :initarg :proof-of-work
-				  :initform 0)
+				  :initform nil)
    (contents :initarg :contents
 			 :initform nil
 			 :reader block-contents)))
@@ -91,7 +91,7 @@
 							   (event-get more-recent-block))
 					 (event-set finished)
 					 (setf proof-of-work local-proof)))))
-		(unless (valid-hash-p (hash chain-block))
+		(unless proof-of-work
 		  (bt:join-thread
 		   (let ((cpu-count (serapeum:count-cpus)))
 			 (car (loop :for x :below cpu-count
