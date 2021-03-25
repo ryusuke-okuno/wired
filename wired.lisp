@@ -122,7 +122,8 @@
 	(wired-request-parsing-failed ()
 	  (node-log node "Peer failed to identify itself!")
 	  (usocket:socket-close (node-connection-socket connection))
-	  (stop-node-connection connection))))
+	  (stop-node-connection connection)))
+  (get-more-peers node))
 
 (defmethod node-deconnection ((node wired-node) connection)
   (with-slots (nodes-inbound nodes-outbound) node

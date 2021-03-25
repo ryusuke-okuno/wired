@@ -9,6 +9,7 @@
 			   #:usocket
 			   #:str
 			   #:bt-semaphore
+			   #:cl-actors
 			   #:ironclad
 			   #:trivial-utf-8
 			   #:cl-intbytes

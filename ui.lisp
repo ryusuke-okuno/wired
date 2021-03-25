@@ -1,6 +1,6 @@
 (in-package :wired)
 
-(defparameter *node* (make-instance 'wired-node :port 4445))
+(defparameter *node* nil)
 
 (defun peers-count ()
   (format nil "Connected to ~d peers" (length (all-nodes *node*))))
@@ -20,15 +20,16 @@
 (defun list-peers ()
   (format nil "Connected to ~a peers" (length (all-nodes *node*))))
 
-(wired-connect)
-
 (defparameter *ui-messages* (queues:make-queue :simple-cqueue))
 
 (defun main ()
+  (unless *node*
+	(setf *node* (make-instance 'wired-node :port 4448)))
+  (wired-connect)
   (ltk:with-ltk ()
 	(let* ((posting-frame (make-instance 'ltk:frame :borderwidth 10))
 		   (post-text (make-instance 'ltk:text :master posting-frame
-									 :width 50 :height 10))
+											   :width 50 :height 10))
 		   (post-button (make-instance 'ltk:button
 									   :text "Post"
 									   :command (lambda ()
@@ -49,7 +50,6 @@
 	  (ltk:pack posting-frame :side :left)
 	  (ltk:pack posts-label :side :right)
 	  (get-chains-since (node-blockchain *node*) 1)
-	  (get-more-peers *node*)
 	  (labels ((update ()
 				 (setf (ltk:text posts-label) (list-posts)
 					   (ltk:text peers-label) (list-peers))
