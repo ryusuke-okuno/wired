@@ -47,6 +47,9 @@ To not use length."
 (defun array-take (n array)
   (make-array n :displaced-to array))
 
+(defun sequence-take (n seq)
+  (subseq seq 0 (min (length seq) n)))
+
 (declaim (inline take))
 
 (defclass atomic-object ()
