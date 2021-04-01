@@ -24,7 +24,7 @@
 
 (defun main ()
   (unless *node*
-	(setf *node* (make-instance 'wired-node :port 4448)))
+	(setf *node* (make-instance 'wired-node :port 4444)))
   (wired-connect)
   (ltk:with-ltk ()
 	(let* ((posting-frame (make-instance 'ltk:frame :borderwidth 10))
@@ -34,7 +34,8 @@
 									   :text "Post"
 									   :command (lambda ()
 												  (let ((message (ltk:text post-text)))
-													(setf (ltk:text post-text) "Calculating the proof of work...")
+													(setf (ltk:text post-text)
+														  "Calculating the proof of work...")
 												    (bt:make-thread
 													 (lambda ()
 													   (wired-new-block *node* message)

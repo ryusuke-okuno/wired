@@ -57,8 +57,6 @@
 		  :initform (make-array 0 :element-type 'chain-block
 								  :adjustable t
 								  :fill-pointer t))
-   (chain-lock :accessor chain-lock
-			   :initform (bt:make-lock "Chain lock"))
    (block-class :initform 'chain-block
 				:reader block-class))
   (:documentation "Blockchain class, that keeps a copy of every transaction and its hash"))
@@ -77,30 +75,32 @@
 (defmethod initialize-instance :after ((chain-block chain-block)
 									   &key (blockchain (error "Must specify blockchain")))
   (with-slots (proof-of-work) chain-block
-	(let ((finished (make-instance 'atomic-event))
-		  (more-recent-block (make-instance 'atomic-event)))
+	(let ((finished (make-atomic :value nil))
+		  (more-recent-block (make-atomic :value nil)))
 	  (labels ((calculate-proof-of-work (id size)
 				 (let ((local-proof (floor (* id (/ 18446744073709551615 size)))))
 				   (loop :for hash = (hash chain-block local-proof)
-						 :until (or (valid-hash-p hash) (event-get finished)
-									(event-get more-recent-block))
+						 :until (or (valid-hash-p hash)
+									(atomic-get finished)
+									(atomic-get more-recent-block))
 						 :do (if (more-recent-block-p chain-block blockchain)
-								 (event-set more-recent-block)
+								 (setf (atomic-get more-recent-block) t)
 								 (incf local-proof)))
-				   (unless (or (event-get finished)
-							   (event-get more-recent-block))
-					 (event-set finished)
-					 (setf proof-of-work local-proof)))))
+				   (unless (or (atomic-get finished)
+							   (atomic-get more-recent-block))
+					 (setf (atomic-get finished) t
+						   proof-of-work local-proof)))))
 		(unless proof-of-work
 		  (bt:join-thread
 		   (let ((cpu-count (serapeum:count-cpus)))
 			 (car (loop :for x :below cpu-count
 						:collect (bt:make-thread (lambda () (calculate-proof-of-work x cpu-count))
-												 :name (format nil "Hashing thread ~a" cpu-count))))))
-		  (when (event-get more-recent-block)
+												 :name (format nil "Hashing thread ~a" x))))))
+		  (when (atomic-get more-recent-block)
 			(error 'more-recent-block)))))))
 
 (defmethod initialize-instance :after ((blockchain blockchain) &key content content-pow)
+  (assert (subtypep (block-class blockchain) 'chain-block))
   (vector-push-extend (make-instance (block-class blockchain)
 									 :id 0
 									 :previous-hash (make-array 64 :element-type '(unsigned-byte 8)
@@ -140,15 +140,14 @@
 				 (verify-chain new-chain)
 				 (equalp (hash (aref chain (1- index)))
 						 (previous-hash first-block)))
-			(bt:with-lock-held ((chain-lock blockchain))
-			  (setf chain
-					(make-array (+ index (length new-chain))
-								:initial-contents (concatenate 'vector
-															   (array-take index chain)
-															   new-chain)
-								:fill-pointer t
-								:element-type 'chain-block
-								:adjustable t)))
+			(setf chain
+				  (make-array (+ index (length new-chain))
+							  :initial-contents (concatenate 'vector
+															 (array-take index chain)
+															 new-chain)
+							  :fill-pointer t
+							  :element-type 'chain-block
+							  :adjustable t))
 			(when (and (> (length new-chain) +chain-trust-length+)
 					   (> index 1)) ;We should probably trust this one
 			  (get-chains-since blockchain 1)))))))
@@ -163,8 +162,7 @@
 		blockchain
 	  (cond ((= (block-id chain-block) (length chain)) ;If everything is okay, add to the chain
 			 (when (verify-block chain-block)
-			   (bt:with-lock-held ((chain-lock blockchain))
-				 (vector-push-extend chain-block chain))))
+			   (vector-push-extend chain-block chain)))
 			((> (block-id chain-block) (length chain)) ;If the block id is superior, it means we missed blocks
 			 (get-chains-since blockchain (length chain)))
 			(t (error 'adding-invalid-block))))))

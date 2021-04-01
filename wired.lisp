@@ -36,6 +36,7 @@
 		  (block-contents chain-block) (base-16-encode (hash chain-block))))
 
 (defmethod encode-block ((chain-block wired-block) &optional proof-of-work)
+  (declare (ignore proof-of-work))
   (concatenate 'vector
 			   (trivial-utf-8:string-to-utf-8-bytes (block-contents chain-block))
 			   (call-next-method)))
@@ -59,9 +60,10 @@
   (with-accessors ((chain chain))
 	  blockchain
 	(let ((chain-slice-size (max 0 (- (length chain) since-index))))
-	  (map 'vector #'wired-block-to-plist (make-array chain-slice-size
-													  :displaced-to chain
-													  :displaced-index-offset (min (length chain) since-index))))))
+	  (map 'vector #'wired-block-to-plist
+		   (make-array chain-slice-size
+					   :displaced-to chain
+					   :displaced-index-offset (min (length chain) since-index))))))
 
 (defclass wired-node (node)
   ((id :reader node-id
@@ -73,7 +75,7 @@
 
 (defclass wired-node-connection (node-connection)
   ((id :accessor node-id
-	   :initform "Default id")
+	   :initform nil)
    (server-port :initform 4444))
   (:documentation "Connection to a wired node"))
 
@@ -97,33 +99,29 @@
 					  indicators))
 	  parsed-plist)))
 
-(defun initialize-connection (node connection)
+(defun initialize-connection (node connection message)
   (let* ((all-connections (all-nodes node))
-		 (join-message (valid-plist-string-p
-						(socket-timeout-read (node-connection-socket connection) 10.0)
-						:id :server-port)))
+		 (join-message (valid-plist-string-p message
+											 :id :server-port)))
 	(when (null join-message)
-	  (error 'wired-request-parsing-failed))
+	  (error 'wired-request-parsing-failed
+			 :request join-message))
 	(with-plist ((:id id)
 				 (:server-port server-port))
 		join-message
 	  (when (some (lambda (x) (string= (node-id x) id))
 				  (cons node all-connections))
-		(error 'wired-request-parsing-failed))
+		(error 'wired-request-parsing-failed
+			   :request join-message))
 	  (node-log node "Peer identified himself as ~a" id)
 	  (setf (node-id connection) id
 			(port connection) server-port))))
 
 (defmethod node-connection ((node wired-node) connection)
+  (node-log node "New connection! Sending id data...")
   (socket-stream-format (usocket:socket-stream (node-connection-socket connection))
 						"~a~%" (print-to-string (list :id (node-id node)
-													  :server-port (port node))))
-  (handler-case (initialize-connection node connection)
-	(wired-request-parsing-failed ()
-	  (node-log node "Peer failed to identify itself!")
-	  (usocket:socket-close (node-connection-socket connection))
-	  (stop-node-connection connection)))
-  (get-more-peers node))
+													  :server-port (port node)))))
 
 (defmethod node-deconnection ((node wired-node) connection)
   (with-slots (nodes-inbound nodes-outbound) node
@@ -131,14 +129,26 @@
 		  nodes-outbound (delete connection nodes-outbound))))
 
 (defmethod recieve-message ((node wired-node) connection message)
-  (handler-case (handle-wired-request node connection message)
-	(wired-request-parsing-failed ()
-	  (node-log node "Parsing request failed!"))))
+  (if (node-id connection)
+	  (handler-case (handle-wired-request node connection message)
+		(wired-request-parsing-failed (c)
+		  (node-log node "Parsing request failed: ~a" c)))
+	  (progn
+		(handler-case (initialize-connection node connection message)
+		  (wired-request-parsing-failed (c)
+			(node-log node "Peer failed to identify itself: ~a" c)
+			(usocket:socket-close (node-connection-socket connection))
+			(remove-node-connection node connection)))
+		(get-more-peers node))))
 
-(define-condition wired-request-parsing-failed () ()
+(define-condition wired-request-parsing-failed (error)
+  ((request :initarg :request
+			:initform nil
+			:reader request))
   (:report (lambda (condition stream)
-			 (declare (ignore condition))
-             (format stream "Could not parse request!"))))
+			 (if (request condition)
+				 (format stream "Could not parse \"~a\"" (request condition))
+				 (format stream "Could not parse request!")))))
 
 (defun print-to-string (obj)
   "Print object to the returned string"
@@ -183,15 +193,19 @@ If it isn't, transmit it to the others nodes"
 
 (defmacro with-plist-error (bindings form &body body)
   "Checks every element of the plist before using it"
-  `(with-plist ,(mapcar (alexandria:curry #'take 2) bindings) ,form
-	 (unless (and ,@(loop :for b :in bindings
-						  :when (null (caddr b))
-							:do (error "Must specify test function!")
-						  :collect `(funcall ,(caddr b) ,(cadr b))))
-	   (error 'wired-request-parsing-failed))
-	 ,@body))
+  (alexandria:with-gensyms (form-sym)
+	`(let ((,form-sym ,form))
+	   (with-plist ,(mapcar (alexandria:curry #'take 2) bindings) ,form-sym
+		 (unless (and ,@(loop :for b :in bindings
+							  :when (null (caddr b))
+								:do (error "Must specify test function!")
+							  :collect `(funcall ,(caddr b) ,(cadr b))))
+		   (error 'wired-request-parsing-failed
+				  :request ,form-sym))
+		 ,@body))))
 
 (defun wired-new-broadcast (node message)
+  "Recieved new block from peers"
   (node-log node "Recieved message: ~a" message)
   (with-plist-error ((:id id #'numberp)
 					 (:proof-of-work proof #'numberp)
@@ -207,6 +221,7 @@ If it isn't, transmit it to the others nodes"
 											   :blockchain (node-blockchain node))))))
 
 (defun wired-new-block (node contents)
+  "Add block to chain and send it to others"
   (with-accessors ((blockchain node-blockchain))
 	  node
 	(let ((new-block (calculate-block blockchain
@@ -221,14 +236,15 @@ If it isn't, transmit it to the others nodes"
 	  (send-message-to node connection
 					   (make-wired-message 'get-chain index nil)))))
 
+;;; TODO Not thread-safe: change it
 (defmethod more-recent-block-p (chain-block (blockchain wired-blockchain))
-  (let ((last (bt:with-lock-held ((chain-lock blockchain))
-				(array-last (chain blockchain)))))
+  (let ((last (array-last (chain blockchain))))
 	(when last
 	  (>= (block-id last)
 		  (block-id chain-block)))))
 
 (defun get-regular-peers (&optional (path "peers.txt"))
+  "Reads the file and gets back the peers"
   (mapcar (lambda (raw-line)
 			(let ((pos (position #\: raw-line)))
 			  (unless pos (error "Error in peers file!"))
@@ -244,7 +260,8 @@ If it isn't, transmit it to the others nodes"
 						 (let ((*package* (find-package :wired))
 							   (*read-eval* nil))
 						   (read-from-string message)))))
-	(unless parsed-message (error 'wired-request-parsing-failed))
+	(unless parsed-message
+	  (error 'wired-request-parsing-failed :request message))
 	(node-log node "Got message: ~a" parsed-message)
 	(with-plist-error ((:action action #'symbolp))
 		parsed-message
@@ -302,4 +319,5 @@ If it isn't, transmit it to the others nodes"
 																			   chain))))
 									  chain)
 									index)))
-		(otherwise (error 'wired-request-parsing-failed))))))
+		(otherwise (error 'wired-request-parsing-failed
+						  :request parsed-message))))))

@@ -52,20 +52,19 @@ To not use length."
 
 (declaim (inline take))
 
-(defclass atomic-object ()
-  ((lock :initform (bt:make-lock)
-		 :reader lock)
-   (value :initarg :value
-		  :initform (error "Must specify the object value!"))))
+(defstruct (atomic (:type vector))
+  (lock (bt:make-lock))
+  (value (error "Must specify value!")))
 
+(declaim (inline atomic-get))
 (defun atomic-get (obj)
   "Get the contents of an atomic object"
-  (slot-value obj 'value))
+  (atomic-value obj))
 
 (defun (setf atomic-get) (value obj)
   "Set the contents of an atomic object"
-  (bt:with-lock-held ((lock obj))
-	(setf (slot-value obj 'value) value)))
+  (bt:with-lock-held ((atomic-lock obj))
+	(setf (atomic-value obj) value)))
 
 (defmacro transform-error (original transformed form)
   `(handler-case ,form
