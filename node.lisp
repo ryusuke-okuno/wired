@@ -22,7 +22,7 @@
 	(write-sequence data s)
 	(force-output s)))
 
-(defclass node ()
+(defclass node (actor)
   ((server-thread :type bt:thread)
    (master-socket :reader node-server-socket)
    (connection-class :reader node-connection-class
@@ -124,6 +124,7 @@
 											(t (c)
 											  (node-log node "Closing connection: ~a..." c)
 											  (remove-node-connection node connection))))))
+						  (update-actor node)
 						  (sleep 0.1))
 				 (node-log node "Exiting...")
 				 (dolist (connection (all-nodes node))

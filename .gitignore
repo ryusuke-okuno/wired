@@ -1,4 +1,4 @@
-node.fasl
-wired.fasl
-blockchain.fasl
+*.fasl
 peers.txt
+lines.py
+wired

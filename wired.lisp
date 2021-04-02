@@ -38,7 +38,7 @@
 (defmethod encode-block ((chain-block wired-block) &optional proof-of-work)
   (declare (ignore proof-of-work))
   (concatenate 'vector
-			   (trivial-utf-8:string-to-utf-8-bytes (block-contents chain-block))
+			   (string-to-utf-8-bytes (block-contents chain-block))
 			   (call-next-method)))
 
 (defun wired-block-to-plist (wired-block)
@@ -115,10 +115,13 @@
 			   :request join-message))
 	  (node-log node "Peer identified himself as ~a" id)
 	  (setf (node-id connection) id
-			(port connection) server-port))))
+			(port connection) server-port)
+	  (with-accessors ((blockchain node-blockchain))
+		  node
+		(if (< (length all-connections) 2)
+			(get-chains-since (node-blockchain node) 0))))))
 
 (defmethod node-connection ((node wired-node) connection)
-  (node-log node "New connection! Sending id data...")
   (socket-stream-format (usocket:socket-stream (node-connection-socket connection))
 						"~a~%" (print-to-string (list :id (node-id node)
 													  :server-port (port node)))))
@@ -176,7 +179,6 @@ If it isn't, transmit it to the others nodes"
 	  (node-log node "Sending to ~a" (node-id connection))
 	  (send-message-to node connection
 					   (make-wired-message 'broadcast content
-										   ;; alexandria:shuffle
 										   (append (mapcar #'node-id destination-nodes) hops))))))
 
 (defun wired-broadcast (node message)
@@ -220,15 +222,12 @@ If it isn't, transmit it to the others nodes"
 											   :previous-hash (hash (array-last (chain (node-blockchain node))))
 											   :blockchain (node-blockchain node))))))
 
-(defun wired-new-block (node contents)
+(defun wired-new-block (node new-block)
   "Add block to chain and send it to others"
   (with-accessors ((blockchain node-blockchain))
 	  node
-	(let ((new-block (calculate-block blockchain
-									  (str:replace-all "
-" "" contents))))
-	  (add-block blockchain new-block)
-	  (wired-broadcast node (wired-block-to-plist new-block)))))
+	(add-block blockchain new-block)
+	(wired-broadcast node (wired-block-to-plist new-block))))
 
 (defmethod get-chains-since ((blockchain wired-blockchain) index)
   (with-slots (node) blockchain
@@ -236,12 +235,9 @@ If it isn't, transmit it to the others nodes"
 	  (send-message-to node connection
 					   (make-wired-message 'get-chain index nil)))))
 
-;;; TODO Not thread-safe: change it
 (defmethod more-recent-block-p (chain-block (blockchain wired-blockchain))
-  (let ((last (array-last (chain blockchain))))
-	(when last
-	  (>= (block-id last)
-		  (block-id chain-block)))))
+  (> (length (chain blockchain))
+	 (block-id chain-block)))
 
 (defun get-regular-peers (&optional (path "peers.txt"))
   "Reads the file and gets back the peers"

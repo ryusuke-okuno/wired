@@ -84,3 +84,6 @@ To not use length."
   `(progn
 	 ,@(loop :until (null args)
 			 :collect `(defparameter ,(pop args) ,(pop args)))))
+
+(defmacro in-new-thread (&body body)
+  `(bt:make-thread (lambda () ,@body)))

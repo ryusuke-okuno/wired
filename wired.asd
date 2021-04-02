@@ -18,6 +18,7 @@
 			   #:queues.simple-cqueue)
   :components ((:file "package")
 			   (:file "utility")
+			   (:file "actors")
 			   (:file "blockchain")
 			   (:file "node")
                (:file "wired")
