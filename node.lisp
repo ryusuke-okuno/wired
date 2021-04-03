@@ -14,8 +14,11 @@
 
 (defun socket-stream-format (stream control-string &rest args)
   "Force the output after format"
-  (apply #'format `(,stream ,control-string ,@args))
-  (force-output stream))
+  (handler-case (progn
+				  (apply #'format `(,stream ,control-string ,@args))
+				  (force-output stream))
+	(t (c)
+	  (error 'wired-request-parsing-failed))))
 
 (defun socket-send-buffer (socket data)
   (let ((s (usocket:socket-stream socket)))
@@ -183,8 +186,11 @@
   (with-slots (nodes-inbound nodes-outbound) node
 	(if (or (member connection nodes-inbound)
 			(member connection nodes-outbound))
-		(socket-stream-format (usocket:socket-stream (node-connection-socket connection))
-							  "~a~%" data)
+		(handler-case (socket-stream-format (usocket:socket-stream (node-connection-socket connection))
+											"~a~%" data)
+		  (t (c)
+			(node-log node "Closing connection: ~a..." c)
+			(remove-node-connection node connection)))
 		(error "Sending a message to an unknown host!"))))
 
 (defgeneric node-id (node)
