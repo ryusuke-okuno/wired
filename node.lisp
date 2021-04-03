@@ -22,6 +22,11 @@
 	(write-sequence data s)
 	(force-output s)))
 
+(defun read-all (stream)
+  (loop for char = (read-char-no-hang stream nil :eof)
+		until (or (null char) (eq char :eof)) collect char into msg
+		finally (return (values msg char))))
+
 (defclass node (actor)
   ((server-thread :type bt:thread)
    (master-socket :reader node-server-socket)
@@ -90,7 +95,7 @@
 	  (handler-case (node-connection node new-connection)
 		(t (c)
 		  (declare (ignore c))
-		  (format t "Failed to initialize connection!")
+		  (node-log node "Failed to initialize connection!")
 		  (remove-node-connection node new-connection)
 		  (setf new-connection nil)))
 	  (when new-connection
@@ -210,5 +215,8 @@
 
 (defun process-connection (connection)
   "Handle new connection to the server"
-  (with-slots (main-node socket) connection
-	(recieve-message main-node connection (read-line (usocket:socket-stream socket)))))
+  (let ((data (read-all (usocket:socket-stream (node-connection-socket connection)))))
+	(when (<= (length data) 1)
+	  (error "EOF when reading"))
+	(with-slots (main-node socket) connection
+	  (recieve-message main-node connection (coerce data 'string)))))

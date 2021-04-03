@@ -1,6 +1,6 @@
 (in-package :wired)
 
-(defparameter *node* nil)
+(defvar *node* nil)
 
 (defun peers-count ()
   (format nil "Connected to ~d peers" (length (all-nodes *node*))))
@@ -34,9 +34,7 @@
 		  "Calculating the proof of work...")
 	(in-new-thread
 	  (let* ((t1 (get-universal-time))
-			 (new-block (calculate-block (node-blockchain *node*)
-										 (str:replace-all "
-" "" message))))
+			 (new-block (calculate-block (node-blockchain *node*) message)))
 		(actor-send *node* #'wired-new-block new-block)
 		(actor-do ui (setf (ltk:text post-text)
 						   (format nil "Done in ~a ms~%"

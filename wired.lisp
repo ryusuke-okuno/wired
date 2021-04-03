@@ -119,7 +119,7 @@
 	  (with-accessors ((blockchain node-blockchain))
 		  node
 		(if (< (length all-connections) 2)
-			(get-chains-since (node-blockchain node) 0))))))
+			(get-chains-since (node-blockchain node) 1))))))
 
 (defmethod node-connection ((node wired-node) connection)
   (socket-stream-format (usocket:socket-stream (node-connection-socket connection))
@@ -155,9 +155,8 @@
 
 (defun print-to-string (obj)
   "Print object to the returned string"
-  (str:replace-all "
-" "" (with-output-to-string (s)
-	   (print obj s))))
+  (with-output-to-string (s)
+	(print obj s)))
 
 (defun wired-node-id-p (id)
   "Is the id a valid wired network id?"
