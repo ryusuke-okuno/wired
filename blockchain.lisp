@@ -17,35 +17,39 @@
 			 :initform nil
 			 :reader block-contents)))
 
-(defgeneric encode-block (chain-block &optional proof-of-work)
+(defgeneric encode-block (chain-block target &optional proof-of-work)
   (:documentation "Transforms the block to a byte array"))
 
 (defgeneric verify-contents (chain-block)
   (:documentation "Verifys the contents of the block"))
 
-(defmethod encode-block ((chain-block chain-block) &optional proof-of-work)
-  (concatenate 'vector
-			   (previous-hash chain-block)
-			   (cl-intbytes:int64->octets (block-id chain-block))
-			   (cl-intbytes:int64->octets (or proof-of-work (proof-of-work chain-block)))))
+(defmethod encode-block ((chain-block chain-block) target &optional proof-of-work)
+  (let ((x 0))
+	(flet ((copy-to (arr)
+			 (dotimes (i (length arr))
+			   (setf (aref target (+ i x)) (aref arr i)))
+			 (setf x (+ x (length arr)))))
+	  (copy-to (previous-hash chain-block))
+	  (copy-to (cl-intbytes:int64->octets (block-id chain-block)))
+	  (copy-to (cl-intbytes:int64->octets (or proof-of-work (proof-of-work chain-block)))))
+	x))
 
 (defmethod verify-contents ((chain-block chain-block)) t)
 
 (defun hash (chain-block &optional pow)
-  (with-slots (id proof-of-work) chain-block
+  (with-slots (id proof-of-work block-size) chain-block
 	(let* ((digest (ironclad:make-digest :sha256))
-		   (block-bytes (encode-block chain-block (or pow proof-of-work)))
-		   (raw-block (make-array (length block-bytes)
+		   (raw-block (make-array 512
 								  :initial-element 0
 								  :element-type '(unsigned-byte 8))))
-	  (dotimes (i (length block-bytes))
-		(setf (aref raw-block i)
-			  (aref block-bytes i)))
+	  (encode-block chain-block raw-block (or pow proof-of-work))
 	  (ironclad:update-digest digest raw-block)
 	  (ironclad:produce-digest digest))))
 
 (defun valid-hash-p (hash)
-  (every #'zerop (take 3 hash)))
+  (and (= (aref hash 0) 0)
+	   (= (aref hash 1) 0)
+	   (= (aref hash 2) 0)))
 
 (define-condition adding-invalid-block () ()
   (:report (lambda (condition stream)

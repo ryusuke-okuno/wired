@@ -35,11 +35,14 @@
 		  (block-id chain-block) (proof-of-work chain-block)
 		  (block-contents chain-block) (base-16-encode (hash chain-block))))
 
-(defmethod encode-block ((chain-block wired-block) &optional proof-of-work)
+(defmethod encode-block ((chain-block wired-block) target &optional proof-of-work)
   (declare (ignore proof-of-work))
-  (concatenate 'vector
-			   (string-to-utf-8-bytes (block-contents chain-block))
-			   (call-next-method)))
+  (let ((x (call-next-method)))
+	(flet ((copy-to (arr)
+			 (dotimes (i (length arr))
+			   (setf (aref target (+ i x)) (aref arr i)))
+			 (setf x (+ x (length arr)))))
+	  (copy-to (string-to-utf-8-bytes (block-contents chain-block))))))
 
 (defun wired-block-to-plist (wired-block)
   (with-accessors ((proof proof-of-work)
@@ -116,10 +119,8 @@
 	  (node-log node "Peer identified himself as ~a" id)
 	  (setf (node-id connection) id
 			(port connection) server-port)
-	  (with-accessors ((blockchain node-blockchain))
-		  node
-		(if (< (length all-connections) 2)
-			(get-chains-since (node-blockchain node) 1))))))
+	  (if (< (length all-connections) 2)
+		  (get-chains-since (node-blockchain node) 1)))))
 
 (defmethod node-connection ((node wired-node) connection)
   (socket-stream-format (usocket:socket-stream (node-connection-socket connection))
