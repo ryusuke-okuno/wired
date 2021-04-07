@@ -86,7 +86,7 @@
   (setf (node-blockchain node)
 		(make-instance 'wired-blockchain
 					   :content "Lisp is the most powerful programming language"
-					   :content-pow 4611686018436821933
+					   :content-pow 4611686018429126192
 					   :node node)))
 
 (defmethod port ((connection node-connection))
