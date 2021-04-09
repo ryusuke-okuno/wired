@@ -271,8 +271,14 @@ If it isn't, transmit it to the others nodes"
 					 (when other-peers
 					   (send-message-to node connection
 										(make-wired-message 'send-peers
-															(mapcar (lambda (c) (list :host (host c)
-																				 :port (port c)))
+															(mapcar (lambda (c)
+																	  (handler-case
+																		  (list :host (host c)
+																				:port (port c))
+																		(t (e)
+																		  (declare (ignore e))
+																		  (node-log node "Removing invalid host...")
+																		  (remove-node-connection node c))))
 																	other-peers)
 															nil)))))
 		(send-peers (mapc (lambda (peer-plist)

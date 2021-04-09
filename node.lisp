@@ -105,7 +105,7 @@
 		(push new-connection nodes-inbound)))))
 
 (defmethod initialize-instance :after ((node node) &key)
-  (with-slots (server-thread output host port
+  (with-slots (server-thread output host port nodes-outbound
 			   master-socket nodes-inbound connection-class)
 	  node
 	(assert (subtypep connection-class 'node-connection))
@@ -122,16 +122,22 @@
 			 (server-main ()
 			   (node-log node "Starting server on port ~d..." port)
 			   (unwind-protect
-					(loop (loop :for sock :in (usocket:wait-for-input (all-sockets)
-																	  :ready-only t
-																	  :timeout 0)
-								:do (if (eq sock master-socket)
-										(node-new-connection node)
-										(let ((connection (find sock (all-nodes node) :key #'node-connection-socket)))
-										  (handler-case (process-connection connection)
-											(t (c)
-											  (node-log node "Closing connection: ~a..." c)
-											  (remove-node-connection node connection))))))
+					(loop (handler-case
+							  (loop :for sock :in (usocket:wait-for-input (all-sockets)
+																		  :ready-only t
+																		  :timeout 0)
+									:do (if (eq sock master-socket)
+											(node-new-connection node)
+											(let ((connection (find sock (all-nodes node) :key #'node-connection-socket)))
+											  (when connection
+												(handler-case (process-connection connection)
+												  (t (c)
+													(node-log node "Closing connection: ~a..." c)
+													(remove-node-connection node connection)))))))
+							(sb-int:simple-stream-error (condition)
+							  (node-log node "Catched exception ~a" condition)
+							  (setf nodes-inbound '()
+									nodes-outbound '())))
 						  (update-actor node)
 						  (sleep 0.1))
 				 (node-log node "Exiting...")
