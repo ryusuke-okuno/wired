@@ -272,14 +272,12 @@ If it isn't, transmit it to the others nodes"
 					   (send-message-to node connection
 										(make-wired-message 'send-peers
 															(mapcar (lambda (c)
-																	  (handler-case
-																		  (list :host (host c)
-																				:port (port c))
-																		(t (e)
-																		  (declare (ignore e))
-																		  (node-log node "Removing invalid host...")
-																		  (remove-node-connection node c))))
-																	other-peers)
+																	  (list :host (host c)
+																			:port (port c)))
+																	(remove-if (lambda (x)
+																				 (or (null (host x))
+																					 (null (port x))))
+																			   other-peers))
 															nil)))))
 		(send-peers (mapc (lambda (peer-plist)
 							(with-plist-error ((:host host #'stringp)
@@ -311,12 +309,10 @@ If it isn't, transmit it to the others nodes"
 																							  :proof-of-work proof
 																							  :id id
 																							  :contents contents
-																							  :previous-hash (let ((res
-																													 (if (= id index)
-																														 (hash (aref (chain (node-blockchain node))
-																																	 (1- index)))
-																														 (hash (aref chain (1- (- id index)))))))
-																											   res)
+																							  :previous-hash (if (= id index)
+																												 (hash (aref (chain (node-blockchain node))
+																															 (1- index)))
+																												 (hash (aref chain (1- (- id index)))))
 																							  :blockchain (node-blockchain node))
 																			   chain))))
 									  chain)

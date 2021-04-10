@@ -18,6 +18,7 @@
 				  (apply #'format `(,stream ,control-string ,@args))
 				  (force-output stream))
 	(t (c)
+	  (declare (ignore c))
 	  (error 'wired-request-parsing-failed))))
 
 (defun socket-send-buffer (socket data)
@@ -54,6 +55,7 @@
 
 (defclass node-connection ()
   ((main-node :initarg :main-node
+			  :accessor main-node
 			  :initform (error "Must specify main node!")
 			  :type node)
    (socket :initarg :socket
@@ -62,11 +64,20 @@
   (:documentation "Class used to describe a connection to another node in the network"))
 
 (defmethod host ((connection node-connection))
-  (ip-address-to-string
-   (usocket:get-peer-address (node-connection-socket connection))))
+  (handler-case
+	  (ip-address-to-string
+	   (usocket:get-peer-address (node-connection-socket connection)))
+	(t (c)
+	  (declare (ignore c))
+	  (remove-node-connection (main-node connection) connection)
+	  nil)))
 
 (defmethod port ((connection node-connection))
-  (usocket:get-peer-port (node-connection-socket connection)))
+  (handler-case (usocket:get-peer-port (node-connection-socket connection))
+	(t (c)
+	  (declare (ignore c))
+	  (remove-node-connection (main-node connection) connection)
+	  nil)))
 
 (defmethod node-id ((node node))
   "S")
@@ -119,6 +130,8 @@
 			   (invoke-restart 'change-port (1+ port)))
 			 (all-sockets ()
 			   (cons master-socket (mapcar #'node-connection-socket (all-nodes node))))
+			 (find-connection (socket)
+			   (find socket (all-nodes node) :key #'node-connection-socket))
 			 (server-main ()
 			   (node-log node "Starting server on port ~d..." port)
 			   (unwind-protect
@@ -128,16 +141,21 @@
 																		  :timeout 0)
 									:do (if (eq sock master-socket)
 											(node-new-connection node)
-											(let ((connection (find sock (all-nodes node) :key #'node-connection-socket)))
+											(let ((connection (find-connection sock)))
 											  (when connection
 												(handler-case (process-connection connection)
 												  (t (c)
 													(node-log node "Closing connection: ~a..." c)
 													(remove-node-connection node connection)))))))
-							(sb-int:simple-stream-error (condition)
-							  (node-log node "Catched exception ~a" condition)
-							  (setf nodes-inbound '()
-									nodes-outbound '())))
+							(stream-error (condition)
+							  (let* ((s (stream-error-stream condition))
+									 (closed-connection
+									   (find s (all-nodes node)
+											 :key (alexandria:compose #'usocket:socket-stream
+																	  #'node-connection-socket))))
+								(node-log node "Catched exception on stream ~a, closing ~a"
+										  s closed-connection)
+								(remove-node-connection node closed-connection))))
 						  (update-actor node)
 						  (sleep 0.1))
 				 (node-log node "Exiting...")

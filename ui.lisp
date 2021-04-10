@@ -25,27 +25,35 @@
    (post-text :accessor post-text)
    (post-button :accessor post-button)
    (peers-label :accessor peers-label)
-   (posts-label :accessor posts-label))
+   (posts-label :accessor posts-label)
+   (infos-label :accessor infos-label)
+   (calculating-block :initform nil
+					  :accessor calculating-block))
   (:documentation "Window to interface with the user"))
 
 (defun post-message (ui post-text)
   (let ((message (ltk:text post-text)))
-	(setf (ltk:text post-text)
-		  "Calculating the proof of work...")
-	(in-new-thread
-	  (let* ((t1 (get-universal-time))
-			 (new-block (calculate-block (node-blockchain *node*) message)))
-		(actor-send *node* #'wired-new-block new-block)
-		(actor-do ui (setf (ltk:text post-text)
-						   (format nil "Done in ~a ms~%"
-								   (- (get-universal-time) t1))))))))
+	(if-not (calculating-block ui)
+			(progn
+			  (setf (ltk:text post-text)
+					"Calculating the proof of work..."
+					(calculating-block ui) t)
+			  (in-new-thread
+				(let* ((t1 (get-universal-time))
+					   (new-block (calculate-block (node-blockchain *node*) message)))
+				  (actor-send *node* #'wired-new-block new-block)
+				  (actor-do ui (setf (ltk:text post-text)
+									 (format nil "Done in ~a ms~%"
+											 (- (get-universal-time) t1))
+									 (calculating-block ui) nil)))))
+			(setf (ltk:text post-text) "Please wait until the proof of work has been calculated..."))))
 
 (defun main ()
-  (unless *node*
-	(setf *node* (make-instance 'wired-node :port 4444)))
+  (unless *node* (setf *node* (make-instance 'wired-node :port 4444)))
   (wired-connect)
   (let ((ui (make-instance 'wired-ui)))
-	(with-slots (posts-label peers-label post-text posting-frame post-button)
+	(with-slots (posts-label peers-label post-text posting-frame post-button
+				 infos-label)
 		ui
 	  (ltk:with-ltk ()
 		(setf posting-frame (make-instance 'ltk:frame :borderwidth 10)
@@ -57,7 +65,10 @@
 										 :master posting-frame)
 			  peers-label (make-instance 'ltk:label :text "Not connected"
 													:master posting-frame)
+			  infos-label (make-instance 'ltk:label :text "Getting chain from peers..."
+													:master posting-frame)
 			  posts-label (make-instance 'ltk:label :text "No posts"))
+		(ltk:pack infos-label)
 		(ltk:pack peers-label)
 		(ltk:pack post-text)
 		(ltk:pack post-button)

@@ -87,3 +87,8 @@ To not use length."
 
 (defmacro in-new-thread (&body body)
   `(bt:make-thread (lambda () ,@body)))
+
+(defmacro if-not (condition then &optional else)
+  `(if (not ,condition)
+	   ,then
+	   ,else))
