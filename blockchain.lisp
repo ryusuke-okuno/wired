@@ -48,8 +48,7 @@
 
 (defun valid-hash-p (hash)
   (and (= (aref hash 0) 0)
-	   (= (aref hash 1) 0)
-	   (= (aref hash 2) 0)))
+	   (= (aref hash 1) 0)))
 
 (define-condition adding-invalid-block () ()
   (:report (lambda (condition stream)

@@ -104,8 +104,7 @@
 
 (defun initialize-connection (node connection message)
   (let* ((all-connections (all-nodes node))
-		 (join-message (valid-plist-string-p message
-											 :id :server-port)))
+		 (join-message (valid-plist-string-p message :id :server-port)))
 	(when (null join-message)
 	  (error 'wired-request-parsing-failed
 			 :request join-message))
@@ -118,9 +117,7 @@
 			   :request join-message))
 	  (node-log node "Peer identified himself as ~a" id)
 	  (setf (node-id connection) id
-			(port connection) server-port)
-	  (if (< (length all-connections) 2)
-		  (get-chains-since (node-blockchain node) 1)))))
+			(port connection) server-port))))
 
 (defmethod node-connection ((node wired-node) connection)
   (socket-stream-format (usocket:socket-stream (node-connection-socket connection))
@@ -133,17 +130,20 @@
 		  nodes-outbound (delete connection nodes-outbound))))
 
 (defmethod recieve-message ((node wired-node) connection message)
+  (node-log node "Message ~a" message)
   (if (node-id connection)
 	  (handler-case (handle-wired-request node connection message)
 		(wired-request-parsing-failed (c)
 		  (node-log node "Parsing request failed: ~a" c)))
-	  (progn
+	  (block nil
 		(handler-case (initialize-connection node connection message)
 		  (wired-request-parsing-failed (c)
 			(node-log node "Peer failed to identify itself: ~a" c)
 			(usocket:socket-close (node-connection-socket connection))
-			(remove-node-connection node connection)))
-		(get-more-peers node))))
+			(remove-node-connection node connection)
+			(return)))
+		(get-more-peers node)
+		(get-chains-since (node-blockchain node) 1))))
 
 (define-condition wired-request-parsing-failed (error)
   ((request :initarg :request
@@ -190,6 +190,7 @@ If it isn't, transmit it to the others nodes"
 (defun get-more-peers (node)
   "Ask for more peers to all of the neightboring nodes"
   (when (< (length (all-nodes node)) +max-peers+)
+	(node-log node "Asking for more peers...")
 	(dolist (n (all-nodes node))
 	  (send-message-to node n (make-wired-message 'get-peers nil nil)))))
 
@@ -222,7 +223,7 @@ If it isn't, transmit it to the others nodes"
 											   :previous-hash (hash (array-last (chain (node-blockchain node))))
 											   :blockchain (node-blockchain node))))))
 
-(defun wired-new-block (node new-block)
+(async-defun wired-new-block (node new-block)
   "Add block to chain and send it to others"
   (with-accessors ((blockchain node-blockchain))
 	  node
@@ -231,6 +232,7 @@ If it isn't, transmit it to the others nodes"
 
 (defmethod get-chains-since ((blockchain wired-blockchain) index)
   (with-slots (node) blockchain
+	(node-log node "Getting chains since ~a..." index)
 	(dolist (connection (all-nodes node))
 	  (send-message-to node connection
 					   (make-wired-message 'get-chain index nil)))))
@@ -250,6 +252,70 @@ If it isn't, transmit it to the others nodes"
 " (alexandria:read-file-into-string path)
 :omit-nulls t)))
 
+(defmethod action-broadcast ((node wired-node) parsed-message)
+  (with-plist-error ((:content content #'listp)
+					 (:hops hops #'listp))
+	  parsed-message
+	(wired-new-broadcast node content)
+	(transmit-wired-message node content hops)))
+
+(defmethod action-get-peers ((node wired-node) connection)
+  (let ((other-peers (remove connection (all-nodes node))))
+	(when other-peers
+	  (send-message-to node connection
+					   (make-wired-message 'send-peers
+										   (mapcar (lambda (c)
+													 (list :host (host c)
+														   :port (port c)))
+												   (remove-if (lambda (x)
+																(or (null (node-id x))
+																	(null (host x))
+																	(null (port x))))
+															  other-peers))
+										   nil)))))
+
+(defmethod action-send-peers ((node wired-node) parsed-message)
+  (mapc (lambda (peer-plist)
+		  (with-plist-error ((:host host #'stringp)
+							 (:port port #'numberp))
+			  peer-plist
+			(connect-to-node node host port)))
+		(getf parsed-message :content)))
+
+(defmethod action-get-chain ((node wired-node) connection parsed-message)
+  (with-plist-error ((:content index (lambda (x) (and (numberp x) (>= x 1)))))
+	  parsed-message
+	(send-message-to node connection
+					 (print-to-string (list :action 'send-chain
+											:content (wired-chain-to-plist (node-blockchain node) index)
+											:index index)))))
+
+(defmethod action-send-chain ((node wired-node) parsed-message)
+  (with-plist-error ((:content new-chain #'vectorp)
+					 (:index index #'numberp))
+	  parsed-message
+	(update-chain (node-blockchain node)
+				  (let ((chain (make-array 0 :adjustable t
+											 :fill-pointer t)))
+					(doarray (new-block new-chain)
+					  (with-plist-error ((:proof-of-work proof #'numberp)
+										 (:id id #'numberp)
+										 (:contents contents #'stringp))
+						  new-block
+						(transform-error adding-invalid-block wired-request-parsing-failed
+										 (vector-push-extend (make-instance 'wired-block
+																			:proof-of-work proof
+																			:id id
+																			:contents contents
+																			:previous-hash (if (= id index)
+																							   (hash (aref (chain (node-blockchain node))
+																										   (1- index)))
+																							   (hash (aref chain (1- (- id index)))))
+																			:blockchain (node-blockchain node))
+															 chain))))
+					chain)
+				  index)))
+
 (defun handle-wired-request (node connection message)
   "Handles a new sent request"
   (let ((parsed-message (ignore-errors
@@ -258,64 +324,14 @@ If it isn't, transmit it to the others nodes"
 						   (read-from-string message)))))
 	(unless parsed-message
 	  (error 'wired-request-parsing-failed :request message))
-	(node-log node "Got message: ~a" parsed-message)
+	(node-log node "got message: ~a" parsed-message)
 	(with-plist-error ((:action action #'symbolp))
 		parsed-message
 	  (case action
-		(broadcast (with-plist-error ((:content content #'listp)
-									  (:hops hops #'listp))
-					   parsed-message
-					 (wired-new-broadcast node content)
-					 (transmit-wired-message node content hops)))
-		(get-peers (let ((other-peers (remove connection (all-nodes node))))
-					 (when other-peers
-					   (send-message-to node connection
-										(make-wired-message 'send-peers
-															(mapcar (lambda (c)
-																	  (list :host (host c)
-																			:port (port c)))
-																	(remove-if (lambda (x)
-																				 (or (null (host x))
-																					 (null (port x))))
-																			   other-peers))
-															nil)))))
-		(send-peers (mapc (lambda (peer-plist)
-							(with-plist-error ((:host host #'stringp)
-											   (:port port #'numberp))
-								peer-plist
-							  (connect-to-node node host port)))
-						  (getf parsed-message :content)))
-		(get-chain (with-plist-error ((:content index (lambda (x)
-														(and (numberp x)
-															 (>= x 1)))))
-					   parsed-message
-					 (send-message-to node connection
-									  (print-to-string (list :action 'send-chain
-															 :content (wired-chain-to-plist (node-blockchain node) index)
-															 :index index)))))
-		(send-chain (with-plist-error ((:content new-chain #'vectorp)
-									   (:index index #'numberp))
-						parsed-message
-					  (update-chain (node-blockchain node)
-									(let ((chain (make-array 0 :adjustable t
-															   :fill-pointer t)))
-									  (doarray (new-block new-chain)
-										(with-plist-error ((:proof-of-work proof #'numberp)
-														   (:id id #'numberp)
-														   (:contents contents #'stringp))
-											new-block
-										  (transform-error adding-invalid-block wired-request-parsing-failed
-														   (vector-push-extend (make-instance 'wired-block
-																							  :proof-of-work proof
-																							  :id id
-																							  :contents contents
-																							  :previous-hash (if (= id index)
-																												 (hash (aref (chain (node-blockchain node))
-																															 (1- index)))
-																												 (hash (aref chain (1- (- id index)))))
-																							  :blockchain (node-blockchain node))
-																			   chain))))
-									  chain)
-									index)))
+		(broadcast  (action-broadcast node parsed-message))
+		(get-peers  (action-get-peers node connection))
+		(send-peers (action-send-peers node parsed-message))
+		(get-chain  (action-get-chain node connection parsed-message))
+		(send-chain (action-send-chain node parsed-message))
 		(otherwise (error 'wired-request-parsing-failed
 						  :request parsed-message))))))

@@ -31,6 +31,12 @@
 					  :accessor calculating-block))
   (:documentation "Window to interface with the user"))
 
+(async-defun ui-post-calculated (ui t1)
+  (setf (ltk:text (post-text ui))
+		(format nil "Done in ~a ms~%"
+				(- (get-universal-time) t1))
+		(calculating-block ui) nil))
+
 (defun post-message (ui post-text)
   (let ((message (ltk:text post-text)))
 	(if-not (calculating-block ui)
@@ -41,19 +47,20 @@
 			  (in-new-thread
 				(let* ((t1 (get-universal-time))
 					   (new-block (calculate-block (node-blockchain *node*) message)))
-				  (actor-send *node* #'wired-new-block new-block)
-				  (actor-do ui (setf (ltk:text post-text)
-									 (format nil "Done in ~a ms~%"
-											 (- (get-universal-time) t1))
-									 (calculating-block ui) nil)))))
+				  (wired-new-block *node* new-block)
+				  (ui-post-calculated ui t1))))
 			(setf (ltk:text post-text) "Please wait until the proof of work has been calculated..."))))
+
+(defun stop-node ()
+  (actor-stop *node*)
+  (setf *node* nil))
 
 (defun main ()
   (unless *node* (setf *node* (make-instance 'wired-node :port 4444)))
   (wired-connect)
   (let ((ui (make-instance 'wired-ui)))
-	(with-slots (posts-label peers-label post-text posting-frame post-button
-				 infos-label)
+	(with-slots (posts-label peers-label post-text
+				 posting-frame post-button infos-label)
 		ui
 	  (ltk:with-ltk ()
 		(setf posting-frame (make-instance 'ltk:frame :borderwidth 10)
@@ -74,7 +81,6 @@
 		(ltk:pack post-button)
 		(ltk:pack posting-frame :side :left)
 		(ltk:pack posts-label :side :right)
-		(get-chains-since (node-blockchain *node*) 1)
 		(labels ((update ()
 				   (setf (ltk:text posts-label) (list-posts)
 						 (ltk:text peers-label) (list-peers))

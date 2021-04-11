@@ -135,27 +135,28 @@
 			 (server-main ()
 			   (node-log node "Starting server on port ~d..." port)
 			   (unwind-protect
-					(loop (handler-case
-							  (loop :for sock :in (usocket:wait-for-input (all-sockets)
-																		  :ready-only t
-																		  :timeout 0)
-									:do (if (eq sock master-socket)
-											(node-new-connection node)
-											(let ((connection (find-connection sock)))
-											  (when connection
-												(handler-case (process-connection connection)
-												  (t (c)
-													(node-log node "Closing connection: ~a..." c)
-													(remove-node-connection node connection)))))))
-							(stream-error (condition)
-							  (let* ((s (stream-error-stream condition))
-									 (closed-connection
-									   (find s (all-nodes node)
-											 :key (alexandria:compose #'usocket:socket-stream
-																	  #'node-connection-socket))))
-								(node-log node "Catched exception on stream ~a, closing ~a"
-										  s closed-connection)
-								(remove-node-connection node closed-connection))))
+					(loop :until (should-stop node)
+						  :do (handler-case
+								  (loop :for sock :in (usocket:wait-for-input (all-sockets)
+																			  :ready-only t
+																			  :timeout 0)
+										:do (if (eq sock master-socket)
+												(node-new-connection node)
+												(let ((connection (find-connection sock)))
+												  (when connection
+													(handler-case (process-connection connection)
+													  (t (c)
+														(node-log node "Closing connection: ~a..." c)
+														(remove-node-connection node connection)))))))
+								(stream-error (condition)
+								  (let* ((s (stream-error-stream condition))
+										 (closed-connection
+										   (find s (all-nodes node)
+												 :key (alexandria:compose #'usocket:socket-stream
+																		  #'node-connection-socket))))
+									(node-log node "Catched exception on stream ~a, closing ~a"
+											  s closed-connection)
+									(remove-node-connection node closed-connection))))
 						  (update-actor node)
 						  (sleep 0.1))
 				 (node-log node "Exiting...")
