@@ -95,17 +95,16 @@
 (defmethod (setf port) (port (connection node-connection))
   (setf (slot-value connection 'server-port) port))
 
-(defun valid-plist-string-p (string &rest indicators)
-  (let ((parsed-plist (ignore-errors (read-from-string string))))
-	(when (and (listp parsed-plist)
-			   (every (lambda (id) (getf parsed-plist id))
-					  indicators))
-	  parsed-plist)))
+(defun valid-plist-p (plist &rest indicators)
+  (when (and (listp plist)
+			 (every (lambda (id) (getf plist id))
+					indicators))
+	plist))
 
 (defun initialize-connection (node connection message)
   (let* ((all-connections (all-nodes node))
-		 (join-message (valid-plist-string-p message :id :server-port)))
-	(when (null join-message)
+		 (join-message (valid-plist-p message :id :server-port)))
+	(unless join-message
 	  (error 'wired-request-parsing-failed
 			 :request join-message))
 	(with-plist ((:id id)
@@ -131,19 +130,24 @@
 
 (defmethod recieve-message ((node wired-node) connection message)
   (node-log node "Message ~a" message)
-  (if (node-id connection)
-	  (handler-case (handle-wired-request node connection message)
-		(wired-request-parsing-failed (c)
-		  (node-log node "Parsing request failed: ~a" c)))
-	  (block nil
-		(handler-case (initialize-connection node connection message)
-		  (wired-request-parsing-failed (c)
-			(node-log node "Peer failed to identify itself: ~a" c)
-			(usocket:socket-close (node-connection-socket connection))
-			(remove-node-connection node connection)
-			(return)))
-		(get-more-peers node)
-		(get-chains-since (node-blockchain node) 1))))
+  (let ((parsed-messages (ignore-errors
+						  (let ((*package* (find-package :wired))
+								(*read-eval* nil))
+							(read-from-string (str:concat "(" message ")"))))))
+	(loop :for message :in parsed-messages
+		  :do (if (node-id connection)
+				  (handler-case (handle-wired-request node connection message)
+					(wired-request-parsing-failed (c)
+					  (node-log node "Parsing request failed: ~a" c)))
+				  (block nil
+					(handler-case (initialize-connection node connection message)
+					  (wired-request-parsing-failed (c)
+						(node-log node "Peer failed to identify itself: ~a" c)
+						(usocket:socket-close (node-connection-socket connection))
+						(remove-node-connection node connection)
+						(return)))
+					(get-more-peers node)
+					(get-chains-since (node-blockchain node) 1))))))
 
 (define-condition wired-request-parsing-failed (error)
   ((request :initarg :request
@@ -318,20 +322,14 @@ If it isn't, transmit it to the others nodes"
 
 (defun handle-wired-request (node connection message)
   "Handles a new sent request"
-  (let ((parsed-message (ignore-errors
-						 (let ((*package* (find-package :wired))
-							   (*read-eval* nil))
-						   (read-from-string message)))))
-	(unless parsed-message
-	  (error 'wired-request-parsing-failed :request message))
-	(node-log node "got message: ~a" parsed-message)
-	(with-plist-error ((:action action #'symbolp))
-		parsed-message
-	  (case action
-		(broadcast  (action-broadcast node parsed-message))
-		(get-peers  (action-get-peers node connection))
-		(send-peers (action-send-peers node parsed-message))
-		(get-chain  (action-get-chain node connection parsed-message))
-		(send-chain (action-send-chain node parsed-message))
-		(otherwise (error 'wired-request-parsing-failed
-						  :request parsed-message))))))
+  (node-log node "Request: ~a" message)
+  (with-plist-error ((:action action #'symbolp))
+	  message
+	(case action
+	  (broadcast  (action-broadcast node message))
+	  (get-peers  (action-get-peers node connection))
+	  (send-peers (action-send-peers node message))
+	  (get-chain  (action-get-chain node connection message))
+	  (send-chain (action-send-chain node message))
+	  (otherwise (error 'wired-request-parsing-failed
+						:request message)))))
