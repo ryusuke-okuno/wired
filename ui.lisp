@@ -20,6 +20,10 @@
 (defun list-peers ()
   (format nil "Connected to ~a peers" (length (all-nodes *node*))))
 
+(defclass ui-node (wired-node)
+  ((ui :initarg :ui
+		:accessor node-ui)))
+
 (defclass wired-ui (actor)
   ((posting-frame :accessor posting-frame)
    (post-text :accessor post-text)
@@ -37,6 +41,17 @@
 				(- (get-universal-time) t1))
 		(calculating-block ui) nil))
 
+(defmethod wired-new-block ((node ui-node) new-block &key time)
+  (handler-case
+	  (progn
+		(call-next-method)
+		(ui-post-calculated (node-ui node) time))
+	(adding-invalid-block (c)
+	  (declare (ignore c))
+	  (format t "Failed to add block, recalculating~%")
+	  (post-message (node-ui node)
+					(block-contents new-block)))))
+
 (defun post-message (ui post-text)
   (let ((message (ltk:text post-text)))
 	(if-not (calculating-block ui)
@@ -47,8 +62,7 @@
 			  (in-new-thread
 				(let* ((t1 (get-universal-time))
 					   (new-block (calculate-block (node-blockchain *node*) message)))
-				  (wired-new-block *node* new-block)
-				  (ui-post-calculated ui t1))))
+				  (actor-send *node* #'wired-new-block new-block :time t1))))
 			(setf (ltk:text post-text) "Please wait until the proof of work has been calculated..."))))
 
 (defun stop-node ()
@@ -56,9 +70,11 @@
   (setf *node* nil))
 
 (defun main ()
-  (unless *node* (setf *node* (make-instance 'wired-node :port 4444)))
-  (wired-connect)
   (let ((ui (make-instance 'wired-ui)))
+	(unless *node* (setf *node* (make-instance 'ui-node
+											   :port 4444
+											   :ui ui)))
+	(wired-connect)
 	(with-slots (posts-label peers-label post-text
 				 posting-frame post-button infos-label)
 		ui

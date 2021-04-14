@@ -39,7 +39,8 @@
   (declare (ignore proof-of-work))
   (let ((x (call-next-method)))
 	(flet ((copy-to (arr)
-			 (dotimes (i (length arr))
+			 (dotimes (i (min (length arr)
+							  (- (length target) x)))
 			   (setf (aref target (+ i x)) (aref arr i)))
 			 (setf x (+ x (length arr)))))
 	  (copy-to (string-to-utf-8-bytes (block-contents chain-block))))))
@@ -129,7 +130,6 @@
 		  nodes-outbound (delete connection nodes-outbound))))
 
 (defmethod recieve-message ((node wired-node) connection message)
-  (node-log node "Message ~a" message)
   (let ((parsed-messages (ignore-errors
 						  (let ((*package* (find-package :wired))
 								(*read-eval* nil))
@@ -146,8 +146,8 @@
 						(usocket:socket-close (node-connection-socket connection))
 						(remove-node-connection node connection)
 						(return)))
-					(get-more-peers node)
-					(get-chains-since (node-blockchain node) 1))))))
+					(get-peers-from node connection)
+					(get-chain-since-from node connection 1))))))
 
 (define-condition wired-request-parsing-failed (error)
   ((request :initarg :request
@@ -191,12 +191,16 @@ If it isn't, transmit it to the others nodes"
 
 (defconstant +max-peers+ 20)
 
+(defun get-peers-from (node connection)
+  (send-message-to node connection
+				   (make-wired-message 'get-peers nil nil)))
+
 (defun get-more-peers (node)
   "Ask for more peers to all of the neightboring nodes"
   (when (< (length (all-nodes node)) +max-peers+)
 	(node-log node "Asking for more peers...")
 	(dolist (n (all-nodes node))
-	  (send-message-to node n (make-wired-message 'get-peers nil nil)))))
+	  (get-peers-from node n))))
 
 (defmacro with-plist-error (bindings form &body body)
   "Checks every element of the plist before using it"
@@ -227,19 +231,24 @@ If it isn't, transmit it to the others nodes"
 											   :previous-hash (hash (array-last (chain (node-blockchain node))))
 											   :blockchain (node-blockchain node))))))
 
-(async-defun wired-new-block (node new-block)
-  "Add block to chain and send it to others"
+(defgeneric wired-new-block (node new-block &key)
+  (:documentation "Add a new block to the node"))
+
+(defmethod wired-new-block ((node wired-node) new-block &key)
   (with-accessors ((blockchain node-blockchain))
 	  node
 	(add-block blockchain new-block)
 	(wired-broadcast node (wired-block-to-plist new-block))))
 
+(defun get-chain-since-from (node connection index)
+  (send-message-to node connection
+					   (make-wired-message 'get-chain index nil)))
+
 (defmethod get-chains-since ((blockchain wired-blockchain) index)
   (with-slots (node) blockchain
 	(node-log node "Getting chains since ~a..." index)
 	(dolist (connection (all-nodes node))
-	  (send-message-to node connection
-					   (make-wired-message 'get-chain index nil)))))
+	  (get-chain-since-from node connection index))))
 
 (defmethod more-recent-block-p (chain-block (blockchain wired-blockchain))
   (> (length (chain blockchain))

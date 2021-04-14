@@ -36,22 +36,6 @@
 	   (defun ,name ,lambda-list
 		 (actor-send ,(car lambda-list) #',function-name ,@(cdr lambda-list))))))
 
-(defmacro async-defmethod (name lambda-list &body body)
-  (alexandria:with-gensyms (function-name)
-	`(progn
-	   (defun ,function-name ,(loop :for pair :in lambda-list
-									:if (symbolp pair)
-									  :collect pair
-									:else
-									  :collect (car pair))
-		 ,@body)
-	   (defmethod ,name ,lambda-list
-		 (actor-send ,(let ((element (car lambda-list)))
-						(if (consp element)
-							(car element) element))
-					 #',function-name
-					 ,@(cdr lambda-list))))))
-
 (async-defun actor-stop (actor)
   (with-slots (should-stop) actor
 	(setf should-stop t)))
